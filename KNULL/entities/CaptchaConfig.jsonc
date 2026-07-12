@@ -1,0 +1,47 @@
+{
+  "name": "CaptchaConfig",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "community",
+        "personal"
+      ],
+      "default": "community",
+      "description": "community = use the shared pool key via backend; personal = user's own key"
+    },
+    "provider": {
+      "type": "string",
+      "enum": [
+        "aycd",
+        "capsolver",
+        "capmonster",
+        "2captcha"
+      ],
+      "default": "aycd",
+      "description": "Which captcha solving service to use in personal mode"
+    },
+    "personal_api_key": {
+      "type": "string",
+      "description": "API key for the selected provider"
+    },
+    "personal_access_token": {
+      "type": "string",
+      "description": "AYCD-only: access token (not needed for other providers)"
+    },
+    "personal_is_connected": {
+      "type": "boolean",
+      "default": false
+    },
+    "poll_tier": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    }
+  }
+}

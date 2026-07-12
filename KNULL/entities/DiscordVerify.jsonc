@@ -1,0 +1,36 @@
+{
+  "name": "DiscordVerify",
+  "type": "object",
+  "properties": {
+    "discord_id": {
+      "type": "string",
+      "description": "Discord user snowflake ID"
+    },
+    "username": {
+      "type": "string",
+      "description": "Discord username#discriminator"
+    },
+    "user_token": {
+      "type": "string",
+      "description": "Discord user token used to verify (stored locally only)"
+    },
+    "verified": {
+      "type": "boolean",
+      "default": false,
+      "description": "True if user is in the required server and channel"
+    },
+    "server_found": {
+      "type": "boolean",
+      "default": false
+    },
+    "channel_found": {
+      "type": "boolean",
+      "default": false
+    },
+    "last_checked": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": []
+}

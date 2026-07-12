@@ -1,0 +1,50 @@
+{
+  "name": "SessionProfile",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Profile name e.g. 'US Chrome Standard'"
+    },
+    "user_agent": {
+      "type": "string"
+    },
+    "viewport_width": {
+      "type": "number",
+      "default": 1280
+    },
+    "viewport_height": {
+      "type": "number",
+      "default": 800
+    },
+    "language": {
+      "type": "string",
+      "default": "en-US"
+    },
+    "timezone": {
+      "type": "string",
+      "default": "America/New_York"
+    },
+    "webrtc_block": {
+      "type": "boolean",
+      "default": true,
+      "description": "Block WebRTC IP leaks"
+    },
+    "canvas_spoof": {
+      "type": "boolean",
+      "default": false,
+      "description": "Add canvas fingerprint noise"
+    },
+    "disable_webgl": {
+      "type": "boolean",
+      "default": false
+    },
+    "extra_args": {
+      "type": "string",
+      "description": "Extra Chrome launch args (space-separated)"
+    }
+  },
+  "required": [
+    "name"
+  ]
+}

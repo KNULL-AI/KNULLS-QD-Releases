@@ -1,0 +1,57 @@
+{
+  "name": "WalmartAccount",
+  "type": "object",
+  "properties": {
+    "label": {
+      "type": "string",
+      "description": "Friendly label e.g. Main, Alt1"
+    },
+    "email": {
+      "type": "string",
+      "description": "Walmart login email"
+    },
+    "password": {
+      "type": "string",
+      "description": "Walmart login password"
+    },
+    "proxy_assignment_type": {
+      "type": "string",
+      "enum": [
+        "none",
+        "single",
+        "group"
+      ],
+      "default": "none",
+      "description": "How this account routes traffic: none=direct, single=one proxy, group=a ProxyGroup"
+    },
+    "proxy_id": {
+      "type": "string",
+      "description": "Proxy ID when assignment type = single"
+    },
+    "proxy_group_id": {
+      "type": "string",
+      "description": "ProxyGroup ID when assignment type = group"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "untested",
+        "needs_code",
+        "signed_in",
+        "failed"
+      ],
+      "default": "untested",
+      "description": "Lifecycle state of the login session"
+    },
+    "last_used": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this account last launched a login session"
+    }
+  },
+  "required": [
+    "label",
+    "email",
+    "password"
+  ]
+}
