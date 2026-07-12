@@ -277,6 +277,66 @@ window.addEventListener("popstate", () => { resetSolveState(); setTimeout(trySol
 window.addEventListener("load",     () => { resetSolveState(); setTimeout(trySolve, 600); });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// WALMART LOGIN AUTO-FILL — triggered on launch with account credentials
+// ─────────────────────────────────────────────────────────────────────────────
+ipcRenderer.on("autofill-credentials", (_e, { email, password }) => {
+  function fillInput(el, value) {
+    // Use React's internal setter so onChange fires properly
+    const nativeInputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    if (nativeInputSetter) nativeInputSetter.call(el, value);
+    else el.value = value;
+    el.dispatchEvent(new Event("input",  { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true }));
+  }
+
+  let _autofillDone = false;
+
+  function waitForInput(selector, cb, maxWaitMs = 10000) {
+    const start = Date.now();
+    const poll = () => {
+      const el = document.querySelector(selector);
+      if (el) { cb(el); return; }
+      if (Date.now() - start < maxWaitMs) setTimeout(poll, 300);
+    };
+    poll();
+  }
+
+  function doAutofill() {
+    if (_autofillDone) return;
+    // Walmart uses: input[name="email"] on step 1, input[type="password"] on step 2
+    const emailSelectors = 'input[name="email"], input[type="email"], input[name="phone-number-email-field"], input[autocomplete="email"], input[autocomplete="username"]';
+    waitForInput(emailSelectors, (emailEl) => {
+      if (_autofillDone) return;
+      fillInput(emailEl, email);
+      emailEl.focus();
+      setTimeout(() => {
+        // Click the primary submit button to proceed to step 2
+        const btn = document.querySelector('button[type="submit"]');
+        if (btn) btn.click();
+        // Poll for password field
+        waitForInput('input[type="password"]', (pwEl) => {
+          if (_autofillDone) return;
+          _autofillDone = true;
+          setTimeout(() => {
+            fillInput(pwEl, password);
+            pwEl.focus();
+            setTimeout(() => {
+              const signInBtn = document.querySelector('button[type="submit"]');
+              if (signInBtn) signInBtn.click();
+            }, 600);
+          }, 400);
+        });
+      }, 800);
+    });
+  }
+
+  // Small initial delay in case the SPA hasn't rendered yet
+  setTimeout(doAutofill, 800);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // VERIFICATION CODE AUTO-FILL — triggered by main process when IMAP finds a code
 // ─────────────────────────────────────────────────────────────────────────────
 ipcRenderer.on("inject-verification-code", (_e, code) => {

@@ -191,6 +191,20 @@ function ImapSection() {
         </div>
       </div>
 
+      {/* Gmail App Password notice */}
+      <div className="flex items-start gap-3 border border-blue-500/20 bg-blue-500/5 rounded-sm px-3 py-2.5 text-[10px] font-mono text-blue-300">
+        <Mail className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-blue-400" />
+        <div className="space-y-1">
+          <p className="text-blue-200 font-semibold">Gmail requires an App Password — your regular password will not work.</p>
+          <ol className="list-decimal list-inside space-y-0.5 text-blue-300/80">
+            <li>Enable 2-Step Verification at <span className="text-blue-400">myaccount.google.com/signinoptions/two-step-verification</span></li>
+            <li>Generate an App Password at <span className="text-blue-400">myaccount.google.com/apppasswords</span></li>
+            <li>Select app: <span className="text-blue-200">Mail</span> → device: <span className="text-blue-200">Windows Computer</span> → click <span className="text-blue-200">Generate</span></li>
+            <li>Paste the 16-character code into the Password field below, then hit Save</li>
+          </ol>
+        </div>
+      </div>
+
       {/* Config */}
       <div className="rounded-sm border border-white/5 bg-[#08080f] p-4 space-y-3">
         <div className="flex items-center gap-1.5 text-[10px] font-mono text-gray-500 uppercase tracking-widest">

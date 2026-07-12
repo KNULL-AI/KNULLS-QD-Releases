@@ -342,11 +342,12 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   // Auto-fill credentials once the page is ready (Walmart login only)
   if (credentials?.email && credentials?.password) {
     win.webContents.once("did-finish-load", () => {
+      // Walmart login page is a React SPA — wait for inputs to render
       setTimeout(() => {
         if (!win.isDestroyed()) {
           win.webContents.send("autofill-credentials", credentials);
         }
-      }, 1500); // brief delay for React hydration
+      }, 2500);
     });
   }
 
