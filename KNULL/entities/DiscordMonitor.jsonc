@@ -1,0 +1,86 @@
+{
+  "name": "DiscordMonitor",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Retailer name e.g. Walmart, PokemonCenter"
+    },
+    "retailer_type": {
+      "type": "string",
+      "enum": [
+        "standard",
+        "walmart",
+        "costco",
+        "pokemon_center"
+      ],
+      "default": "standard",
+      "description": "standard = fire all task_group_ids on trigger; walmart = parse item URL from message and match to a TaskGroup by target_url; costco = parse URL from message, update the single assigned TaskGroup's target_url, then launch; pokemon_center = fire all task groups when message contains trigger keywords, no URL needed"
+    },
+    "auth_mode": {
+      "type": "string",
+      "enum": [
+        "user_token",
+        "bot_token"
+      ],
+      "default": "user_token"
+    },
+    "user_token": {
+      "type": "string"
+    },
+    "bot_token": {
+      "type": "string"
+    },
+    "channels": {
+      "type": "array",
+      "description": "List of Discord channels to monitor for this retailer",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "keyword": {
+            "type": "string"
+          },
+          "last_message_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "task_group_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "For standard/walmart mode: task groups to run. For costco mode: single TaskGroup whose target_url gets overwritten by the drop URL. For pokemon_center mode: all task groups fire immediately on keyword match."
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "poll_interval_seconds": {
+      "type": "number",
+      "default": 5
+    },
+    "cooldown_seconds": {
+      "type": "number",
+      "default": 600
+    },
+    "last_triggered": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trigger_count": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "name"
+  ]
+}

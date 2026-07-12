@@ -1,0 +1,48 @@
+{
+  "name": "ImapConfig",
+  "type": "object",
+  "properties": {
+    "host": {
+      "type": "string",
+      "default": "imap.gmail.com",
+      "description": "IMAP server hostname"
+    },
+    "port": {
+      "type": "number",
+      "default": 993
+    },
+    "username": {
+      "type": "string",
+      "description": "IMAP login username (shared inbox address)"
+    },
+    "password": {
+      "type": "string",
+      "description": "IMAP login password / app password"
+    },
+    "tls": {
+      "type": "boolean",
+      "default": true,
+      "description": "Use TLS (IMAPS) for the connection"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the shared-inbox monitor poll is running"
+    },
+    "poll_interval_seconds": {
+      "type": "number",
+      "default": 15,
+      "description": "How often to poll the shared inbox for new verification codes"
+    },
+    "last_sync": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last successful IMAP poll"
+    }
+  },
+  "required": [
+    "host",
+    "username",
+    "password"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "ProxyGroup",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Group name"
+    },
+    "proxy_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Array of Proxy record IDs in this group"
+    },
+    "description": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ]
+}
