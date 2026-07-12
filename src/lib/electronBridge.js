@@ -12,8 +12,8 @@ function invoke(channel, ...args) {
 }
 
 /** Launch a browser instance for a session */
-export function launchBrowser({ sessionId, url, proxy, userAgent, browser = "chrome", profile = null, noPreload = false, manualOpen = false }) {
-  return invoke("launchBrowser", { sessionId, url, proxy, userAgent, browser, profile, noPreload, manualOpen });
+export function launchBrowser({ sessionId, url, proxy, userAgent, browser = "chrome", profile = null, noPreload = false, manualOpen = false, credentials = null }) {
+  return invoke("launchBrowser", { sessionId, url, proxy, userAgent, browser, profile, noPreload, manualOpen, credentials });
 }
 
 /** Kill a running browser session */

@@ -224,7 +224,7 @@ let tray = null;
 let _quitting = false;
 
 // ── IPC: launch a task BrowserWindow ─────────────────────────────────────────
-ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAgent, browser, profile, noPreload = false, manualOpen = false }) => {
+ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAgent, browser, profile, noPreload = false, manualOpen = false, credentials = null }) => {
   // Close existing window for this session if any
   if (browserWindows.has(sessionId)) {
     try { browserWindows.get(sessionId).destroy(); } catch (_) {}
@@ -338,6 +338,18 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   });
 
   win.loadURL(url);
+
+  // Auto-fill credentials once the page is ready (Walmart login only)
+  if (credentials?.email && credentials?.password) {
+    win.webContents.once("did-finish-load", () => {
+      setTimeout(() => {
+        if (!win.isDestroyed()) {
+          win.webContents.send("autofill-credentials", credentials);
+        }
+      }, 1500); // brief delay for React hydration
+    });
+  }
+
   browserWindows.set(sessionId, win);
   if (proxy) sessionProxies.set(sessionId, { host: proxy.host, username: proxy.username, password: proxy.password || "" });
 
