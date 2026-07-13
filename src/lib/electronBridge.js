@@ -153,11 +153,3 @@ export function geminiAnalyze(logs, proxySummary) {
 export function cfRequest(url, body) {
   return invoke("cfRequest", { url, body });
 }
-
-/** Open Discord OAuth2 popup, intercept code, exchange via Cloudflare Worker */
-export function discordOAuthLogin(cfEndpoint) {
-  if (typeof window !== "undefined" && window.electronAPI?.discordOAuthLogin) {
-    return window.electronAPI.discordOAuthLogin(cfEndpoint);
-  }
-  return Promise.resolve({ error: "Not running in Electron" });
-}

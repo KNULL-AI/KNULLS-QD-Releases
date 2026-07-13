@@ -1,8 +1,0 @@
-name = "knull-activation"
-main = "worker.js"
-compatibility_date = "2024-01-01"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "knull-users"
-database_id = "15a6141f-668b-4802-9607-e68be7a3a74c"
