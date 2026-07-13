@@ -26,16 +26,17 @@
  *   database_name = "knull-users"
  *   database_id = "<your-d1-database-id>"
  *
- * Set these secrets via: wrangler secret put DISCORD_BOT_TOKEN
- *   DISCORD_BOT_TOKEN — your bot token (must be in the server with GUILD_MEMBER intent)
- *   ADMIN_KEY         — a secret string you use for admin endpoints
+ * Set these secrets via wrangler secret put:
+ *   DISCORD_CLIENT_ID     — your Discord OAuth2 app client ID
+ *   DISCORD_CLIENT_SECRET — your Discord OAuth2 app client secret
+ *   REQUIRED_ROLE_ID      — the Born Sniper role ID (right-click role in Discord → Copy ID)
+ *   ADMIN_KEY             — a secret string you use for admin endpoints
  *
  * Config constants below:
  */
 
-const REQUIRED_GUILD_ID   = "1369077918244012072";
-const REQUIRED_CHANNEL_ID = "1369077919758155940";
-const MONTHLY_USER_LIMIT  = 100;
+const REQUIRED_GUILD_ID  = "1369077918244012072";
+const MONTHLY_USER_LIMIT = 100;
 
 export default {
   async fetch(request, env) {
@@ -78,34 +79,53 @@ export default {
 
     const { action, discord_id } = body;
 
-    // ── Register: new user activation ────────────────────────────────────────
-    if (action === "register") {
-      const { username, discriminator, guild_id, channel_id, user_token } = body;
+    // ── OAuth exchange: trade Discord code for access token + register user ──
+    if (path === "/oauth/exchange") {
+      const { code, redirect_uri } = body;
+      if (!code) return json({ error: "Missing code" }, 400, cors);
 
-      if (!discord_id || !username) return json({ error: "Missing discord_id or username" }, 400, cors);
-      if (guild_id !== REQUIRED_GUILD_ID) return json({ error: "Invalid server" }, 403, cors);
-      if (channel_id !== REQUIRED_CHANNEL_ID) return json({ error: "Invalid channel" }, 403, cors);
+      // Exchange code for access token
+      const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: env.DISCORD_CLIENT_ID,
+          client_secret: env.DISCORD_CLIENT_SECRET,
+          grant_type: "authorization_code",
+          code,
+          redirect_uri,
+        }),
+      });
+      if (!tokenRes.ok) return json({ error: "Failed to exchange Discord code" }, 400, cors);
+      const tokenData = await tokenRes.json();
+      const accessToken = tokenData.access_token;
 
-      // Verify the user is actually in the guild using their own token
-      const memberCheck = await verifyGuildMemberSelf(user_token, REQUIRED_GUILD_ID);
-      if (!memberCheck.ok) return json({ error: "You are not a member of the required server", blocked: false }, 403, cors);
+      // Fetch user identity
+      const meRes = await fetch("https://discord.com/api/v10/users/@me", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!meRes.ok) return json({ error: "Failed to fetch Discord identity" }, 400, cors);
+      const me = await meRes.json();
 
-      // Check if already registered and blocked
-      const existing = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
+      // Verify guild membership AND Born Sniper role via the user's own OAuth token
+      const memberCheck = await verifyGuildMemberRole(accessToken, REQUIRED_GUILD_ID, env.REQUIRED_ROLE_ID);
+      if (!memberCheck.ok) return json({ error: memberCheck.error || "Access denied — Born Sniper role required" }, 403, cors);
+
+      // Check if blocked
+      const existing = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(me.id).first();
       if (existing?.blocked) return json({ error: "Your access has been revoked by an administrator.", blocked: true }, 403, cors);
 
       const now = new Date().toISOString();
       if (existing) {
-        await env.DB.prepare(
-          "UPDATE users SET username = ?, discriminator = ?, guild_id = ?, channel_id = ?, last_validated = ? WHERE discord_id = ?"
-        ).bind(username, discriminator ?? "0", guild_id, channel_id, now, discord_id).run();
+        await env.DB.prepare("UPDATE users SET username = ?, last_validated = ? WHERE discord_id = ?")
+          .bind(me.username, now, me.id).run();
       } else {
         await env.DB.prepare(
           "INSERT INTO users (discord_id, username, discriminator, guild_id, channel_id, blocked, solves_used, registered_at, last_validated) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)"
-        ).bind(discord_id, username, discriminator ?? "0", guild_id, channel_id, now, now).run();
+        ).bind(me.id, me.username, me.discriminator ?? "0", REQUIRED_GUILD_ID, "", now, now).run();
       }
 
-      return json({ ok: true, discord_id, username }, 200, cors);
+      return json({ ok: true, discord_id: me.id, username: me.username, access_token: accessToken }, 200, cors);
     }
 
     // ── Validate: called on every app launch ──────────────────────────────────
@@ -115,14 +135,6 @@ export default {
       const user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
       if (!user) return json({ error: "Not registered", blocked: false }, 403, cors);
       if (user.blocked) return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
-
-      // Re-check guild membership via bot on every launch (graceful if no bot token)
-      const memberCheck = await verifyGuildMember(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discord_id);
-      if (!memberCheck.ok) {
-        // Auto-block if they left the server
-        await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discord_id).run();
-        return json({ error: "You have been removed from the required server — access revoked.", blocked: true }, 403, cors);
-      }
 
       // Update last_validated timestamp
       await env.DB.prepare("UPDATE users SET last_validated = ? WHERE discord_id = ?")
@@ -151,30 +163,21 @@ export default {
   },
 };
 
-// ── Helper: verify guild membership via Discord Bot API ───────────────────────
-async function verifyGuildMember(botToken, guildId, userId) {
-  if (!botToken) return { ok: true }; // skip check if no bot token configured (dev mode)
+// ── Helper: verify guild membership + Born Sniper role via guilds.members.read ─
+// Uses GET /users/@me/guilds/{guild_id}/member — requires guilds.members.read scope
+async function verifyGuildMemberRole(accessToken, guildId, requiredRoleId) {
   try {
-    const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${userId}`, {
-      headers: { Authorization: `Bot ${botToken}` },
+    const res = await fetch(`https://discord.com/api/v10/users/@me/guilds/${guildId}/member`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
-    return { ok: res.ok };
-  } catch {
-    return { ok: true }; // network error — grant benefit of the doubt
-  }
-}
-
-// ── Helper: verify guild membership using the user's own token ────────────────
-async function verifyGuildMemberSelf(userToken, guildId) {
-  if (!userToken) return { ok: false };
-  try {
-    const res = await fetch(`https://discord.com/api/v10/users/@me/guilds`, {
-      headers: { Authorization: userToken },
-    });
-    if (!res.ok) return { ok: false };
-    const guilds = await res.json();
-    const isMember = Array.isArray(guilds) && guilds.some((g) => g.id === guildId);
-    return { ok: isMember };
+    if (res.status === 403 || res.status === 404) return { ok: false, error: "You are not a member of the required server" };
+    if (!res.ok) return { ok: false, error: "Failed to verify server membership" };
+    const member = await res.json();
+    const roles = member.roles ?? [];
+    if (requiredRoleId && !roles.includes(requiredRoleId)) {
+      return { ok: false, error: "You do not have the Born Sniper role — access restricted" };
+    }
+    return { ok: true };
   } catch {
     return { ok: true }; // network error — grant benefit of the doubt
   }

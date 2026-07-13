@@ -339,15 +339,50 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
 
   win.loadURL(url);
 
-  // Auto-fill credentials once the page is ready (Walmart login only)
+  // Auto-fill credentials via executeJavaScript — more reliable than IPC for SPAs
   if (credentials?.email && credentials?.password) {
+    const { email, password } = credentials;
     win.webContents.once("did-finish-load", () => {
-      // Walmart login page is a React SPA — wait for inputs to render
-      setTimeout(() => {
-        if (!win.isDestroyed()) {
-          win.webContents.send("autofill-credentials", credentials);
-        }
-      }, 2500);
+      // Poll for the email input then fill it
+      const emailScript = `
+        (function poll(attempts) {
+          const input = document.querySelector('input[name="phone-number-email-field"], input[name="email"], input[type="email"], input[autocomplete="email"], input[autocomplete="username"]');
+          if (input) {
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeSetter.call(input, ${JSON.stringify(email)});
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.focus();
+            setTimeout(() => {
+              const btn = document.querySelector('button[type="submit"]');
+              if (btn) btn.click();
+            }, 700);
+          } else if (attempts > 0) {
+            setTimeout(() => poll(attempts - 1), 400);
+          }
+        })(25);
+      `;
+      // Poll for password field after email step
+      const pwScript = `
+        (function poll(attempts) {
+          const pw = document.querySelector('input[type="password"]');
+          if (pw) {
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeSetter.call(pw, ${JSON.stringify(password)});
+            pw.dispatchEvent(new Event('input', { bubbles: true }));
+            pw.dispatchEvent(new Event('change', { bubbles: true }));
+            pw.focus();
+            setTimeout(() => {
+              const btn = document.querySelector('button[type="submit"]');
+              if (btn) btn.click();
+            }, 700);
+          } else if (attempts > 0) {
+            setTimeout(() => poll(attempts - 1), 500);
+          }
+        })(20);
+      `;
+      setTimeout(() => { if (!win.isDestroyed()) win.webContents.executeJavaScript(emailScript).catch(() => {}); }, 1500);
+      setTimeout(() => { if (!win.isDestroyed()) win.webContents.executeJavaScript(pwScript).catch(() => {}); }, 5500);
     });
   }
 
@@ -357,6 +392,71 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   console.log(`[knull] Launched BrowserWindow session ${sessionId} → ${url} via ${proxy ? `${proxy.protocol || "HTTP"} ${proxy.host}:${proxy.port} auth=${!!proxy.username}` : "no proxy"}`);
   updateTray();
   return { ok: true };
+});
+
+// ── IPC: Discord OAuth2 SSO login ─────────────────────────────────────────────
+// Opens a popup window to Discord's authorize page, intercepts the redirect,
+// exchanges the code via Cloudflare Worker, returns { discord_id, username, access_token }
+const DISCORD_CLIENT_ID = "1526025662266212574";
+const DISCORD_REDIRECT   = "http://localhost/callback";
+const DISCORD_SCOPES     = "identify guilds guilds.members.read";
+
+ipcMain.handle("discord-oauth-login", async (_event, { cfEndpoint }) => {
+  return new Promise((resolve) => {
+    const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(DISCORD_REDIRECT)}&response_type=code&scope=${encodeURIComponent(DISCORD_SCOPES)}`;
+
+    const popup = new BrowserWindow({
+      width: 500,
+      height: 700,
+      title: "Login with Discord",
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+
+    let resolved = false;
+
+    // Intercept navigation to the redirect URI to grab the auth code
+    popup.webContents.on("will-navigate", (_e, navUrl) => {
+      if (navUrl.startsWith(DISCORD_REDIRECT)) {
+        const parsed = new URL(navUrl);
+        const code = parsed.searchParams.get("code");
+        if (!resolved && code) {
+          resolved = true;
+          popup.destroy();
+          // Exchange code via Cloudflare Worker
+          nodeFetch(cfEndpoint + "/oauth/exchange", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code, redirect_uri: DISCORD_REDIRECT }),
+            timeoutMs: 15000,
+          }).then((r) => r.json()).then((data) => resolve(data)).catch((e) => resolve({ error: e.message }));
+        }
+      }
+    });
+
+    // Also catch did-navigate for some Discord redirect flows
+    popup.webContents.on("did-navigate", (_e, navUrl) => {
+      if (navUrl.startsWith(DISCORD_REDIRECT)) {
+        const parsed = new URL(navUrl);
+        const code = parsed.searchParams.get("code");
+        if (!resolved && code) {
+          resolved = true;
+          popup.destroy();
+          nodeFetch(cfEndpoint + "/oauth/exchange", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code, redirect_uri: DISCORD_REDIRECT }),
+            timeoutMs: 15000,
+          }).then((r) => r.json()).then((data) => resolve(data)).catch((e) => resolve({ error: e.message }));
+        }
+      }
+    });
+
+    popup.on("closed", () => {
+      if (!resolved) { resolved = true; resolve({ error: "Login window closed" }); }
+    });
+
+    popup.loadURL(authUrl);
+  });
 });
 
 // ── IPC: fetch Discord /users/@me identity ────────────────────────────────────
