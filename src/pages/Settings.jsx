@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import toast from "react-hot-toast";
-import { imapFetch, injectVerificationCode } from "@/lib/electronBridge";
+import { imapFetch, injectVerificationCode, startImapPoll, stopImapPoll, getImapPollStatus, onImapPollEvent, offImapPollEvent } from "@/lib/electronBridge";
 
 // ─── Config Export / Import ───────────────────────────────────────────────────
 
@@ -56,11 +56,9 @@ function ImapSection() {
   const [testing, setTesting] = useState(false);
   const [dirty, setDirty] = useState(false);
 
-  const timerRef = useRef(null);
-  const activeRef = useRef(false);
   const configRef = useRef(null);
   const accountsRef = useRef([]);
-  const processedUidsRef = useRef(new Set());
+  const processedUidsRef = useRef(new Set()); // still used by the manual Test button's one-off check
 
   const load = async () => {
     const [cfgs, accts, cds] = await Promise.all([
@@ -73,12 +71,34 @@ function ImapSection() {
     setAccounts(Array.isArray(accts) ? accts : []); accountsRef.current = Array.isArray(accts) ? accts : [];
     setCodes(Array.isArray(cds) ? cds : []);
     (Array.isArray(cds) ? cds : []).forEach((c) => c.message_uid && processedUidsRef.current.add(c.message_uid));
-    setPolling(!!cfg?.is_active); activeRef.current = !!cfg?.is_active;
+    // Ask the main process what's ACTUALLY running, rather than trusting the persisted
+    // is_active flag — the main process is now the source of truth for polling state.
+    const status = await getImapPollStatus();
+    setPolling(!!status?.active);
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
   useEffect(() => { configRef.current = config; }, [config]);
-  useEffect(() => () => { activeRef.current = false; clearTimeout(timerRef.current); }, []);
+
+  // Live updates from the main-process poll loop — fires no matter what page is open.
+  useEffect(() => {
+    const wrapper = onImapPollEvent((evt) => {
+      if (evt.type === "error") {
+        toast.error(`IMAP: ${evt.error}`, { duration: 4000 });
+        return;
+      }
+      if (evt.type === "result") {
+        if (evt.newCodes?.length) {
+          setCodes((prev) => [...evt.newCodes, ...prev].slice(0, 200));
+          evt.newCodes.forEach((c) => c.message_uid && processedUidsRef.current.add(c.message_uid));
+          toast.success(`${evt.newCodes.length} new verification code${evt.newCodes.length !== 1 ? "s" : ""}`);
+        }
+        setConfig((c) => (c ? { ...c, last_sync: new Date().toISOString() } : c));
+        refreshAccounts();
+      }
+    });
+    return () => offImapPollEvent(wrapper);
+  }, []);
 
   const refreshAccounts = async () => {
     const accts = await db.WalmartAccount.list();
@@ -110,33 +130,22 @@ function ImapSection() {
     if (newCount > 0) toast.success(`${newCount} new verification code${newCount !== 1 ? "s" : ""}`);
   };
 
-  const pollOnce = async () => {
-    const cfg = configRef.current;
-    if (!cfg?.host || !cfg?.username || !cfg?.password) return;
-    const res = await imapFetch({ host: cfg.host, port: cfg.port, username: cfg.username, password: cfg.password, tls: cfg.tls, limit: 15 });
-    if (res.error) { toast.error(`IMAP: ${res.error}`, { duration: 4000 }); return; }
-    await processMessages(res.messages || []);
-    await db.ImapConfig.update(cfg.id, { last_sync: new Date().toISOString() });
-    setConfig((c) => c ? { ...c, last_sync: new Date().toISOString() } : c);
-    refreshAccounts();
-  };
-
-  const scheduleNext = () => {
-    clearTimeout(timerRef.current);
-    const ms = (configRef.current?.poll_interval_seconds || 15) * 1000;
-    timerRef.current = setTimeout(async () => { if (!activeRef.current) return; await pollOnce(); if (activeRef.current) scheduleNext(); }, ms);
-  };
+  // Background polling now runs in the Electron main process (see main.js:
+  // start-imap-poll / imap-poll-event) so it keeps running even if this page
+  // unmounts — the loop no longer lives here as component/timer state.
 
   const startPolling = async () => {
     if (!config) return;
-    activeRef.current = true; setPolling(true);
     await db.ImapConfig.update(config.id, { is_active: true });
     setConfig((c) => ({ ...c, is_active: true }));
-    scheduleNext(); toast.success("IMAP monitor started");
+    await startImapPoll();
+    setPolling(true);
+    toast.success("IMAP monitor started");
   };
 
   const stopPolling = async () => {
-    activeRef.current = false; setPolling(false); clearTimeout(timerRef.current);
+    await stopImapPoll();
+    setPolling(false);
     if (config) { await db.ImapConfig.update(config.id, { is_active: false }); setConfig((c) => ({ ...c, is_active: false })); }
     toast("IMAP monitor stopped");
   };
