@@ -351,6 +351,24 @@ ipcRenderer.on("inject-verification-code", (_e, code) => {
     el.dispatchEvent(new KeyboardEvent("keyup", { key: "0", bubbles: true }));
   }
   function visible(el) { return el.offsetParent !== null || el.getClientRects().length > 0; }
+
+  // Walmart enables its primary submit action only after React processes every
+  // OTP input event. Wait for that state instead of clicking a generic button
+  // (which could select the passkey alternative on this screen).
+  function submitVerification() {
+    const started = Date.now();
+    const trySubmit = () => {
+      const signIn = Array.from(document.querySelectorAll('button[type="submit"], button')).find((button) =>
+        visible(button) && !button.disabled && button.textContent.trim().replace(/\s+/g, " ").toLowerCase() === "sign in"
+      );
+      if (signIn) {
+        signIn.click();
+        return;
+      }
+      if (Date.now() - started < 5000) setTimeout(trySubmit, 150);
+    };
+    setTimeout(trySubmit, 250);
+  }
   const textTypes = ["text", "tel", "number", ""];
 
   // 1) Per-digit OTP boxes (maxlength=1) — distribute one char each
@@ -359,6 +377,7 @@ ipcRenderer.on("inject-verification-code", (_e, code) => {
   );
   if (singles.length >= String(code).length) {
     for (let i = 0; i < String(code).length; i++) fillInput(singles[i], String(code)[i]);
+    submitVerification();
     return;
   }
 
@@ -370,13 +389,13 @@ ipcRenderer.on("inject-verification-code", (_e, code) => {
     const sig = ((el.name || "") + " " + (el.id || "") + " " + (el.placeholder || "") + " " + (el.getAttribute("autocomplete") || "")).toLowerCase();
     return /code|otp|verif|pin|mfa|token|2fa/.test(sig);
   });
-  if (labelled.length) { fillInput(labelled[0], String(code)); return; }
+  if (labelled.length) { fillInput(labelled[0], String(code)); submitVerification(); return; }
 
   // 3) Any empty visible text/tel/number input
   const any = Array.from(document.querySelectorAll("input")).filter(
     (el) => visible(el) && !el.value && textTypes.includes((el.type || "text").toLowerCase())
   );
-  if (any.length) { fillInput(any[0], String(code)); }
+  if (any.length) { fillInput(any[0], String(code)); submitVerification(); }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
