@@ -80,18 +80,14 @@ function ImapSection() {
   useEffect(() => { load(); }, []);
   useEffect(() => { configRef.current = config; }, [config]);
 
-  // Live updates from the main-process poll loop — fires no matter what page is open.
+  // Local listener — only updates this page's UI when codes arrive
+  // The global App.jsx listener handles the toast notifications for all pages
   useEffect(() => {
     const wrapper = onImapPollEvent((evt) => {
-      if (evt.type === "error") {
-        toast.error(`IMAP: ${evt.error}`, { duration: 4000 });
-        return;
-      }
       if (evt.type === "result") {
         if (evt.newCodes?.length) {
           setCodes((prev) => [...evt.newCodes, ...prev].slice(0, 200));
           evt.newCodes.forEach((c) => c.message_uid && processedUidsRef.current.add(c.message_uid));
-          toast.success(`${evt.newCodes.length} new verification code${evt.newCodes.length !== 1 ? "s" : ""}`);
         }
         setConfig((c) => (c ? { ...c, last_sync: new Date().toISOString() } : c));
         refreshAccounts();

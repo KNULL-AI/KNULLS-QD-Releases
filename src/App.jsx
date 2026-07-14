@@ -1,4 +1,5 @@
 import { Toaster } from "react-hot-toast"
+import { useEffect } from "react"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { HashRouter as Router, Route, Routes } from 'react-router-dom';
@@ -16,8 +17,28 @@ import CaptchaSolver from '@/pages/CaptchaSolver';
 import Logs from '@/pages/Logs';
 import SessionProfiles from '@/pages/SessionProfiles';
 import Settings from '@/pages/Settings';
+import toast from 'react-hot-toast';
+import { onImapPollEvent, offImapPollEvent } from '@/lib/electronBridge';
 
 function App() {
+  // Global IMAP poll listener — persists across page navigation and routes
+  // so the user sees real-time verification code updates no matter which page they're on
+  useEffect(() => {
+    const wrapper = onImapPollEvent((evt) => {
+      if (evt.type === "error") {
+        toast.error(`IMAP: ${evt.error}`, { duration: 4000 });
+        return;
+      }
+      if (evt.type === "result") {
+        if (evt.newCodes?.length) {
+          toast.success(`${evt.newCodes.length} new verification code${evt.newCodes.length !== 1 ? "s" : ""}`);
+        }
+      }
+    });
+    // Never clean up this listener — it should stay active for the lifetime of the app
+    return () => offImapPollEvent(wrapper);
+  }, []);
+
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
