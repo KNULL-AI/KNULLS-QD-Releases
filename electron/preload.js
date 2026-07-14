@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   imapFetch: (config) => ipcRenderer.invoke("imap-fetch", config),
   injectVerificationCode: (sessionId, code) => ipcRenderer.invoke("inject-verification-code", { sessionId, code }),
 
+  // IMAP background polling — runs in main process, survives renderer navigation
+  startImapPoll: () => ipcRenderer.invoke("start-imap-poll"),
+  stopImapPoll: () => ipcRenderer.invoke("stop-imap-poll"),
+  getImapPollStatus: () => ipcRenderer.invoke("imap-poll-status"),
+  onImapPollEvent: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("imap-poll-event", wrapper); return wrapper; },
+  offImapPollEvent: (wrapper) => ipcRenderer.removeListener("imap-poll-event", wrapper),
+
   // Queue timers — main process ticks every second per session
   startQueueTimer: (sessionId, currentMs = 0) => ipcRenderer.invoke("start-queue-timer", { sessionId, currentMs }),
   stopQueueTimer: (sessionId) => ipcRenderer.invoke("stop-queue-timer", sessionId),

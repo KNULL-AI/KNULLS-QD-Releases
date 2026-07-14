@@ -153,3 +153,30 @@ export function geminiAnalyze(logs, proxySummary) {
 export function cfRequest(url, body) {
   return invoke("cfRequest", { url, body });
 }
+
+/** Start/stop the background IMAP poll loop — runs in main process, survives page navigation */
+export function startImapPoll() {
+  return invoke("startImapPoll");
+}
+
+export function stopImapPoll() {
+  return invoke("stopImapPoll");
+}
+
+export function getImapPollStatus() {
+  return invoke("getImapPollStatus");
+}
+
+/** Subscribe to IMAP poll results/errors from the main process. Returns the wrapper to pass to off*. */
+export function onImapPollEvent(cb) {
+  if (typeof window !== "undefined" && window.electronAPI?.onImapPollEvent) {
+    return window.electronAPI.onImapPollEvent(cb);
+  }
+  return cb;
+}
+
+export function offImapPollEvent(wrapper) {
+  if (typeof window !== "undefined" && window.electronAPI?.offImapPollEvent) {
+    window.electronAPI.offImapPollEvent(wrapper);
+  }
+}

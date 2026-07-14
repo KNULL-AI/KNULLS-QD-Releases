@@ -304,8 +304,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
   // ── TEMP DEBUG: open DevTools for credentialed manual-open sessions so we can
-  // inspect the real login form DOM (shadow roots, actual attribute names, bot
-  // challenge overlays, etc). Remove this block once autofill selectors are confirmed.
+  // inspect the real login form DOM. Remove this block once things are stable.
   if (manualOpen && credentials) {
     win.webContents.once("did-finish-load", () => {
       if (!win.isDestroyed()) win.webContents.openDevTools({ mode: "detach" });
@@ -394,41 +393,94 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
           return null;
         }
 
-        // ── Step 1: email / phone field ──────────────────────────────────
-        const emailInput = await waitFor([
-          'input[placeholder="Phone number or email (required)"]',
-          'input[name="phone-number-email-field"]',
-          'input[name="email"]',
-          'input[type="email"]',
-          'input[autocomplete="email"]',
-          'input[autocomplete="username"]',
-          'input[type="text"]:not([autocomplete="username"])', // generic fallback if placeholder wording changes
-        ], 15000);
-        if (!emailInput) return;
+        async function waitForButtonByText(textCandidates, timeoutMs) {
+          const start = Date.now();
+          while (Date.now() - start < timeoutMs) {
+            const buttons = [...document.querySelectorAll('button')];
+            let match = buttons.find((b) =>
+              textCandidates.some((t) => b.innerText.trim().toLowerCase() === t.toLowerCase())
+            );
+            if (!match) match = document.querySelector('button[type="submit"]');
+            if (!match) match = buttons.find((b) => /button_primary/i.test(b.className));
+            if (match && match.offsetParent !== null && !match.disabled) return match;
+            await sleep(300);
+          }
+          return null;
+        }
 
-        await humanType(emailInput, ${JSON.stringify(email)});
-        await sleep(rand(400, 900)); // human pause before hitting Continue
+        async function selectRadioByName(nameAttr, labelSubstring, timeoutMs) {
+          const start = Date.now();
+          while (Date.now() - start < timeoutMs) {
+            const radios = [...document.querySelectorAll('input[type="radio"]')];
+            let match = radios.find((r) => r.name === nameAttr);
+            if (!match && labelSubstring) {
+              match = radios.find((r) => {
+                const label = r.closest('label')?.innerText
+                  || document.querySelector('label[for="' + r.id + '"]')?.innerText
+                  || '';
+                return label.toLowerCase().includes(labelSubstring.toLowerCase());
+              });
+            }
+            if (match && match.offsetParent !== null) return match;
+            await sleep(300);
+          }
+          return null;
+        }
 
-        const continueBtn = await waitFor(['button[type="submit"]'], 3000);
-        if (continueBtn) continueBtn.click();
+        try {
+          console.log('[knull-autofill] starting');
 
-        // ── Step 2: password field (only exists after Continue) ───────────
-        const pwInput = await waitFor(['input[type="password"]'], 15000);
-        if (!pwInput) return;
+          // ── Step 1: email / phone field ──────────────────────────────────
+          const emailInput = await waitFor([
+            'input[placeholder="Phone number or email (required)"]',
+            'input[name="phone-number-email-field"]',
+            'input[name="email"]',
+            'input[type="email"]',
+            'input[autocomplete="email"]',
+            'input[autocomplete="username"]',
+            'input[type="text"]:not([autocomplete="username"])', // generic fallback if placeholder wording changes
+          ], 15000);
+          if (!emailInput) { console.error('[knull-autofill] email input not found'); return; }
+          console.log('[knull-autofill] email input found, typing');
 
-        await sleep(rand(300, 700));
-        await humanType(pwInput, ${JSON.stringify(password)});
-        await sleep(rand(400, 900));
+          await humanType(emailInput, ${JSON.stringify(email)});
+          await sleep(rand(400, 900)); // human pause before hitting Continue
 
-        const signInBtn = await waitFor(['button[type="submit"]'], 3000);
-        if (signInBtn) signInBtn.click();
+          const continueBtn = await waitFor(['button[type="submit"]'], 3000);
+          if (!continueBtn) { console.error('[knull-autofill] continue button not found'); return; }
+          console.log('[knull-autofill] clicking continue');
+          continueBtn.click();
+
+          // ── Step 2: choose sign-in method → select "Email me a verification code" ──
+          const emailOtpRadio = await selectRadioByName('otpEmail', 'email me a verification code', 15000);
+          if (!emailOtpRadio) { console.error('[knull-autofill] email OTP radio not found'); return; }
+          console.log('[knull-autofill] email OTP radio found, clicking');
+
+          emailOtpRadio.click(); // real .click() correctly triggers React's radio onChange
+          await sleep(rand(500, 900));
+
+          const sendCodeBtn = await waitForButtonByText(['request code'], 5000);
+          if (!sendCodeBtn) { console.error('[knull-autofill] send-code button not found'); return; }
+          console.log('[knull-autofill] send-code button found:', sendCodeBtn.outerHTML.slice(0, 200), 'disabled:', sendCodeBtn.disabled);
+          sendCodeBtn.click();
+          console.log('[knull-autofill] send-code button clicked — done');
+
+          // From here the IMAP monitor (Settings → IMAP) picks up the incoming code
+          // and injects it via injectVerificationCode — no password step needed.
+        } catch (err) {
+          console.error('[knull-autofill] uncaught error:', err && err.message, err && err.stack);
+        }
       })();
     `;
 
     win.webContents.once("did-finish-load", () => {
       const startDelay = Math.floor(Math.random() * 700) + 800; // 800–1500ms
       setTimeout(() => {
-        if (!win.isDestroyed()) win.webContents.executeJavaScript(typeScript).catch(() => {});
+        if (!win.isDestroyed()) {
+          win.webContents.executeJavaScript(typeScript).catch((err) => {
+            console.error("[knull-autofill] executeJavaScript rejected:", err);
+          });
+        }
       }, startDelay);
     });
   }
@@ -932,6 +984,134 @@ ipcMain.handle("stop-queue-timer", (_event, sessionId) => {
   return { ok: true };
 });
 
+// ── IMAP background polling ─────────────────────────────────────────────────
+// Lives entirely in the main process (like the queue timers above) so it keeps
+// running no matter which page is open in the renderer — unlike a setTimeout
+// loop living in React component state, which dies the moment that page unmounts.
+//
+// Deliberately uses its own tiny DB helpers below rather than reusing/refactoring
+// the db:create / db:update IPC handlers, to avoid touching code every other
+// table in the app already depends on.
+let imapPollTimer = null;
+let imapPollActive = false;
+const imapProcessedUids = new Set();
+
+function _imapDbList(table) {
+  const db = getDb(); if (!db) return [];
+  return db.prepare(`SELECT * FROM "${table}"`).all().map(rowToRecord);
+}
+function _imapDbCreate(table, data) {
+  const db = getDb(); if (!db) return null;
+  const id = newId();
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO "${table}" (id, created_date, updated_date, data) VALUES (@id, @created_date, @updated_date, @data)`)
+    .run({ id, created_date: now, updated_date: now, data: JSON.stringify({ ...data }) });
+  return { id, created_date: now, updated_date: now, ...data };
+}
+function _imapDbUpdate(table, id, data) {
+  const db = getDb(); if (!db) return null;
+  const existing = rowToRecord(db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id));
+  if (!existing) return null;
+  const { id: _id, created_date, updated_date, ...rest } = existing;
+  const merged = { ...rest, ...data };
+  const now = new Date().toISOString();
+  db.prepare(`UPDATE "${table}" SET data = ?, updated_date = ? WHERE id = ?`).run(JSON.stringify(merged), now, id);
+  return { id, created_date, updated_date: now, ...merged };
+}
+
+async function imapPollOnce() {
+  const cfg = _imapDbList("ImapConfig")[0];
+  if (!cfg?.host || !cfg?.username || !cfg?.password) return;
+
+  let res;
+  try {
+    const { imapFetch } = require("./imap");
+    res = await imapFetch({ host: cfg.host, port: cfg.port, username: cfg.username, password: cfg.password, tls: cfg.tls, limit: 15 });
+  } catch (e) {
+    res = { error: e.message };
+  }
+
+  if (res.error) {
+    if (mainWindow) mainWindow.webContents.send("imap-poll-event", { type: "error", error: res.error });
+    return;
+  }
+
+  const messages = res.messages || [];
+  const accounts = _imapDbList("WalmartAccount");
+  const newCodes = [];
+
+  for (const msg of messages) {
+    if (imapProcessedUids.has(msg.uid)) continue;
+    imapProcessedUids.add(msg.uid);
+    if (!msg.code) continue;
+
+    const account = accounts.find((a) => a.email && a.email.toLowerCase() === (msg.to || "").toLowerCase());
+    let delivery_status = "displayed", session_id = null;
+
+    if (!account) {
+      delivery_status = "no_account";
+    } else {
+      const sessions = _imapDbList("BrowserSession").filter(
+        (s) => s.walmart_account_id === account.id && s.status === "running"
+      );
+      if (sessions.length) {
+        const win = browserWindows.get(sessions[0].id);
+        if (win && !win.isDestroyed()) {
+          win.webContents.send("inject-verification-code", msg.code);
+          delivery_status = "auto_filled";
+          session_id = sessions[0].id;
+        } else {
+          delivery_status = "no_session";
+        }
+      } else {
+        delivery_status = "no_session";
+      }
+    }
+
+    const rec = _imapDbCreate("VerificationCode", {
+      code: msg.code, to_email: msg.to, from_email: msg.from, subject: msg.subject,
+      snippet: msg.snippet, account_id: account ? account.id : null, session_id, delivery_status, message_uid: msg.uid,
+    });
+    newCodes.push(rec);
+  }
+
+  _imapDbUpdate("ImapConfig", cfg.id, { last_sync: new Date().toISOString() });
+
+  if (mainWindow) {
+    mainWindow.webContents.send("imap-poll-event", { type: "result", newCodes, checkedCount: messages.length });
+  }
+}
+
+function imapScheduleNext() {
+  clearTimeout(imapPollTimer);
+  const cfg = _imapDbList("ImapConfig")[0];
+  const ms = (cfg?.poll_interval_seconds || 15) * 1000;
+  imapPollTimer = setTimeout(async () => {
+    if (!imapPollActive) return;
+    await imapPollOnce();
+    if (imapPollActive) imapScheduleNext();
+  }, ms);
+}
+
+ipcMain.handle("start-imap-poll", () => {
+  if (imapPollActive) return { ok: true, alreadyRunning: true };
+  imapPollActive = true;
+  // Seed the dedup set from already-known codes so a restart doesn't reprocess old mail.
+  imapProcessedUids.clear();
+  _imapDbList("VerificationCode").forEach((c) => c.message_uid && imapProcessedUids.add(c.message_uid));
+  imapScheduleNext();
+  return { ok: true };
+});
+
+ipcMain.handle("stop-imap-poll", () => {
+  imapPollActive = false;
+  clearTimeout(imapPollTimer);
+  imapPollTimer = null;
+  return { ok: true };
+});
+
+ipcMain.handle("imap-poll-status", () => ({ active: imapPollActive }));
+
 // ── Tray icon ─────────────────────────────────────────────────────────────────
 function buildTrayIcon(runningCount) {
   // 16x16 green circle for running, grey for idle — generated as PNG data URI
@@ -1116,6 +1296,14 @@ app.on("login", (_event, _webContents, _req, authInfo, callback) => {
 app.whenReady().then(() => {
   createWindow();
   createTray();
+  // Resume IMAP background polling if it was left active from a previous session
+  const imapCfg = _imapDbList("ImapConfig")[0];
+  if (imapCfg?.is_active) {
+    imapPollActive = true;
+    imapProcessedUids.clear();
+    _imapDbList("VerificationCode").forEach((c) => c.message_uid && imapProcessedUids.add(c.message_uid));
+    imapScheduleNext();
+  }
 });
 app.on("window-all-closed", () => {
   if (_quitting) app.exit(0);
@@ -1136,6 +1324,8 @@ app.on("before-quit", () => {
   }
   browserWindows.clear();
   sessionProxies.clear();
+  imapPollActive = false;
+  clearTimeout(imapPollTimer);
 });
 
 // ── IPC: Gemini AI diagnostics ────────────────────────────────────────────────
