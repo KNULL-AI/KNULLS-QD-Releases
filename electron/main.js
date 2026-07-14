@@ -1032,7 +1032,10 @@ async function imapPollOnce() {
   }
 
   if (res.error) {
-    if (mainWindow) mainWindow.webContents.send("imap-poll-event", { type: "error", error: res.error });
+    console.error("[knull-imap] fetch error:", res.error, "mainWindow:", !!mainWindow);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("imap-poll-event", { type: "error", error: res.error });
+    }
     return;
   }
 
@@ -1077,8 +1080,12 @@ async function imapPollOnce() {
 
   _imapDbUpdate("ImapConfig", cfg.id, { last_sync: new Date().toISOString() });
 
-  if (mainWindow) {
+  console.log("[knull-imap] poll complete: found", messages.length, "messages,", newCodes.length, "new codes, mainWindow:", !!mainWindow);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log("[knull-imap] sending imap-poll-event to renderer");
     mainWindow.webContents.send("imap-poll-event", { type: "result", newCodes, checkedCount: messages.length });
+  } else {
+    console.warn("[knull-imap] mainWindow not ready, event NOT sent");
   }
 }
 
@@ -1094,11 +1101,13 @@ function imapScheduleNext() {
 }
 
 ipcMain.handle("start-imap-poll", () => {
+  console.log("[knull-imap] start-imap-poll called, currently active:", imapPollActive);
   if (imapPollActive) return { ok: true, alreadyRunning: true };
   imapPollActive = true;
   // Seed the dedup set from already-known codes so a restart doesn't reprocess old mail.
   imapProcessedUids.clear();
   _imapDbList("VerificationCode").forEach((c) => c.message_uid && imapProcessedUids.add(c.message_uid));
+  console.log("[knull-imap] poll activated, scheduling first poll");
   imapScheduleNext();
   return { ok: true };
 });
