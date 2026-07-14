@@ -303,6 +303,15 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   // Block new-window popups that could steal focus/session
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
+  // ── TEMP DEBUG: open DevTools for credentialed manual-open sessions so we can
+  // inspect the real login form DOM (shadow roots, actual attribute names, bot
+  // challenge overlays, etc). Remove this block once autofill selectors are confirmed.
+  if (manualOpen && credentials) {
+    win.webContents.once("did-finish-load", () => {
+      if (!win.isDestroyed()) win.webContents.openDevTools({ mode: "detach" });
+    });
+  }
+
   if (manualOpen) manualOpenSessions.add(sessionId);
   else manualOpenSessions.delete(sessionId);
 
@@ -337,54 +346,94 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     }
   });
 
-  win.loadURL(url);
-
-  // Auto-fill credentials via executeJavaScript — more reliable than IPC for SPAs
+  // Auto-fill credentials via executeJavaScript — more reliable than IPC for SPAs.
+  // Registered BEFORE loadURL: `once("did-finish-load", ...)` can otherwise miss the
+  // event entirely if the page finishes loading (e.g. cached) before this line runs.
   if (credentials?.email && credentials?.password) {
     const { email, password } = credentials;
+
+    // Single script that types like a human: char-by-char with randomized delays,
+    // real keydown/keypress/input/keyup events per keystroke, and waits for each
+    // field to actually appear rather than guessing a fixed delay.
+    const typeScript = `
+      (async function () {
+        function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+        function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+        function setNativeValue(el, value) {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+        }
+
+        async function humanType(el, text) {
+          el.scrollIntoView({ block: 'center' });
+          el.focus();
+          el.dispatchEvent(new Event('focus', { bubbles: true }));
+          let current = '';
+          for (const ch of text) {
+            current += ch;
+            el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+            setNativeValue(el, current);
+            el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+            await sleep(rand(60, 160)); // per-keystroke pause — tune to taste
+          }
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        async function waitFor(selectors, timeoutMs) {
+          const start = Date.now();
+          while (Date.now() - start < timeoutMs) {
+            for (const sel of selectors) {
+              const el = document.querySelector(sel);
+              if (el && el.offsetParent !== null) return el; // skip hidden/detached matches
+            }
+            await sleep(300);
+          }
+          return null;
+        }
+
+        // ── Step 1: email / phone field ──────────────────────────────────
+        const emailInput = await waitFor([
+          'input[placeholder="Phone number or email (required)"]',
+          'input[name="phone-number-email-field"]',
+          'input[name="email"]',
+          'input[type="email"]',
+          'input[autocomplete="email"]',
+          'input[autocomplete="username"]',
+          'input[type="text"]:not([autocomplete="username"])', // generic fallback if placeholder wording changes
+        ], 15000);
+        if (!emailInput) return;
+
+        await humanType(emailInput, ${JSON.stringify(email)});
+        await sleep(rand(400, 900)); // human pause before hitting Continue
+
+        const continueBtn = await waitFor(['button[type="submit"]'], 3000);
+        if (continueBtn) continueBtn.click();
+
+        // ── Step 2: password field (only exists after Continue) ───────────
+        const pwInput = await waitFor(['input[type="password"]'], 15000);
+        if (!pwInput) return;
+
+        await sleep(rand(300, 700));
+        await humanType(pwInput, ${JSON.stringify(password)});
+        await sleep(rand(400, 900));
+
+        const signInBtn = await waitFor(['button[type="submit"]'], 3000);
+        if (signInBtn) signInBtn.click();
+      })();
+    `;
+
     win.webContents.once("did-finish-load", () => {
-      // Poll for the email input then fill it
-      const emailScript = `
-        (function poll(attempts) {
-          const input = document.querySelector('input[name="phone-number-email-field"], input[name="email"], input[type="email"], input[autocomplete="email"], input[autocomplete="username"]');
-          if (input) {
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            nativeSetter.call(input, ${JSON.stringify(email)});
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.focus();
-            setTimeout(() => {
-              const btn = document.querySelector('button[type="submit"]');
-              if (btn) btn.click();
-            }, 700);
-          } else if (attempts > 0) {
-            setTimeout(() => poll(attempts - 1), 400);
-          }
-        })(25);
-      `;
-      // Poll for password field after email step
-      const pwScript = `
-        (function poll(attempts) {
-          const pw = document.querySelector('input[type="password"]');
-          if (pw) {
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            nativeSetter.call(pw, ${JSON.stringify(password)});
-            pw.dispatchEvent(new Event('input', { bubbles: true }));
-            pw.dispatchEvent(new Event('change', { bubbles: true }));
-            pw.focus();
-            setTimeout(() => {
-              const btn = document.querySelector('button[type="submit"]');
-              if (btn) btn.click();
-            }, 700);
-          } else if (attempts > 0) {
-            setTimeout(() => poll(attempts - 1), 500);
-          }
-        })(20);
-      `;
-      setTimeout(() => { if (!win.isDestroyed()) win.webContents.executeJavaScript(emailScript).catch(() => {}); }, 1500);
-      setTimeout(() => { if (!win.isDestroyed()) win.webContents.executeJavaScript(pwScript).catch(() => {}); }, 5500);
+      const startDelay = Math.floor(Math.random() * 700) + 800; // 800–1500ms
+      setTimeout(() => {
+        if (!win.isDestroyed()) win.webContents.executeJavaScript(typeScript).catch(() => {});
+      }, startDelay);
     });
   }
+
+  win.loadURL(url);
 
   browserWindows.set(sessionId, win);
   if (proxy) sessionProxies.set(sessionId, { host: proxy.host, username: proxy.username, password: proxy.password || "" });
