@@ -11,6 +11,8 @@ import { Switch } from "@/components/ui/switch";
 import toast from "react-hot-toast";
 import { imapFetch, injectVerificationCode, startImapPoll, stopImapPoll, getImapPollStatus, onImapPollEvent, offImapPollEvent } from "@/lib/electronBridge";
 
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
+
 // ─── Config Export / Import ───────────────────────────────────────────────────
 
 async function exportConfig() {
@@ -457,7 +459,7 @@ export default function Settings() {
         <div className="border border-white/5 bg-[#08080f] rounded-sm p-5 space-y-2">
           <h2 className="font-mono text-xs text-gray-400 uppercase tracking-wider">About</h2>
           <div className="space-y-1">
-            <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Version</span><span className="text-gray-300">1.0.0</span></div>
+            <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Version</span><span className="text-gray-300">{APP_VERSION}</span></div>
             <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Build</span><span className="text-gray-300">KNULL Queue Destroyer</span></div>
             <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Architecture</span><span className="text-gray-300">React + Electron + SQLite</span></div>
           </div>

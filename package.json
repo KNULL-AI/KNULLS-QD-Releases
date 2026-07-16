@@ -1,7 +1,7 @@
 {
   "name": "knull-queue-destroyer",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "electron/main.entry.js",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,11 @@
     "build:bytecode": "node scripts/compile-bytecode.cjs",
     "build:integrity": "node scripts/generate-integrity-manifest.cjs",
     "electron:build": "vite build && npm run build:bytecode && npm run build:integrity && electron-builder --win",
+    "clean:dist": "node -e \"const fs=require('fs'); if (fs.existsSync('dist')) fs.rmSync('dist', { recursive: true, force: true }); console.log('dist cleaned');\"",
+    "electron:release": "npm run clean:dist && npm run electron:build",
+    "release:patch": "npm version patch --no-git-tag-version && npm run electron:release",
+    "release:minor": "npm version minor --no-git-tag-version && npm run electron:release",
+    "release:major": "npm version major --no-git-tag-version && npm run electron:release",
     "electron:dev": "concurrently \"npm run dev\" \"cross-env NODE_ENV=development electron .\"",
     "rebuild": "npx @electron/rebuild -f -w better-sqlite3"
   },
