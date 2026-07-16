@@ -20,6 +20,7 @@
  */
 
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, session, dialog } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const http = require("http");
 const https = require("https");
@@ -1337,9 +1338,66 @@ app.on("login", (_event, _webContents, _req, authInfo, callback) => {
   callback();
 });
 
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    console.log("[knull] Auto-updater disabled in development mode");
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => {
+    console.log("[knull] Checking for app updates...");
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    console.log(`[knull] Update available: ${info?.version || "unknown"}`);
+    dialog.showMessageBox(mainWindow || null, {
+      type: "info",
+      title: "Update Available",
+      message: `Version ${info?.version || "new"} is available. Downloading in the background now.`,
+      buttons: ["OK"],
+    }).catch(() => {});
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    console.log("[knull] App is up to date");
+  });
+
+  autoUpdater.on("error", (err) => {
+    console.error("[knull] Auto-updater error:", err?.message || err);
+  });
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    console.log(`[knull] Update downloaded: ${info?.version || "unknown"}`);
+    try {
+      const res = await dialog.showMessageBox(mainWindow || null, {
+        type: "info",
+        title: "Update Ready",
+        message: `Version ${info?.version || "new"} has been downloaded.`,
+        detail: "Restart the app now to install this update.",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (res.response === 0) {
+        autoUpdater.quitAndInstall(false, true);
+      }
+    } catch (e) {
+      console.error("[knull] Failed to show update dialog:", e?.message || e);
+    }
+  });
+
+  autoUpdater.checkForUpdates().catch((e) => {
+    console.error("[knull] checkForUpdates failed:", e?.message || e);
+  });
+}
+
 app.whenReady().then(() => {
   createWindow();
   createTray();
+  setupAutoUpdater();
   // Resume IMAP background polling if it was left active from a previous session
   const imapCfg = _imapDbList("ImapConfig")[0];
   if (imapCfg?.is_active) {
