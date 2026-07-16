@@ -194,10 +194,9 @@ export default {
       // Re-check guild membership via bot on every launch (graceful if no bot token)
       const memberCheck = await verifyGuildMember(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discord_id);
       if (!memberCheck.ok) {
-        // Auto-block if they left the server
-        await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discord_id).run();
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "auto_block_left_guild" });
-        return json({ error: "You have been removed from the required server — access revoked.", blocked: true }, 403, cors);
+        // Fail-open: bot membership checks can false-negative due token/intents/permissions.
+        // Registration already performs a self-token guild check, so do not auto-revoke here.
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "flagged", reason: `membership_check_failed:${memberCheck.reason || "unknown"}` });
       }
 
       // Update last_validated timestamp
@@ -237,9 +236,8 @@ export default {
 
       const memberCheck = await verifyGuildMember(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discord_id);
       if (!memberCheck.ok) {
-        await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discord_id).run();
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "auto_block_left_guild" });
-        return json({ error: "You have been removed from the required server — access revoked.", blocked: true }, 403, cors);
+        // Fail-open: avoid hard-block loop from bot-side false negatives.
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: `membership_check_failed:${memberCheck.reason || "unknown"}` });
       }
 
       const now = Math.floor(Date.now() / 1000);

@@ -10,14 +10,26 @@ const targets = [
   },
 ];
 
-for (const { source, output } of targets) {
-  if (!fs.existsSync(source)) {
-    throw new Error(`Missing source file: ${source}`);
+async function main() {
+  for (const { source, output } of targets) {
+    if (!fs.existsSync(source)) {
+      throw new Error(`Missing source file: ${source}`);
+    }
+
+    await bytenode.compileFile({
+      filename: source,
+      output,
+      compileAsModule: true,
+      // Electron >= 42 requires compiling inside an actual Electron main process
+      // to avoid cachedData mismatch when loading .jsc in the packaged main process.
+      electronMain: true,
+    });
+
+    console.log(`Compiled ${path.relative(root, source)} -> ${path.relative(root, output)} (electronMain)`);
   }
-  bytenode.compileFile({
-    filename: source,
-    output,
-    compileAsModule: true,
-  });
-  console.log(`Compiled ${path.relative(root, source)} -> ${path.relative(root, output)}`);
 }
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
