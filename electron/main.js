@@ -21,6 +21,8 @@
 
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, session, dialog } = require("electron");
 const { autoUpdater } = require("electron-updater");
+const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
 const http = require("http");
 const https = require("https");
@@ -36,6 +38,7 @@ let Database;
 try { Database = require("better-sqlite3"); } catch (_) { Database = null; }
 
 const DB_PATH = path.join(app.getPath ? app.getPath("userData") : __dirname, "knull.db");
+const DEVICE_ID_PATH = path.join(app.getPath ? app.getPath("userData") : __dirname, "device-id.txt");
 
 let _db = null;
 function getDb() {
@@ -66,6 +69,21 @@ function initSchema(db) {
 
 function newId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function getOrCreateDeviceId() {
+  try {
+    if (fs.existsSync(DEVICE_ID_PATH)) {
+      const existing = String(fs.readFileSync(DEVICE_ID_PATH, "utf8") || "").trim();
+      if (existing) return existing;
+    }
+  } catch (_) {}
+
+  const id = crypto.randomUUID();
+  try {
+    fs.writeFileSync(DEVICE_ID_PATH, id, "utf8");
+  } catch (_) {}
+  return id;
 }
 
 function rowToRecord(row) {
@@ -1486,6 +1504,13 @@ Respond in plain English. Be concise and technical. Format with clear section he
 // ── IPC: Cloudflare activation request (bypasses Electron renderer CORS) ─────
 ipcMain.handle("cf-request", async (_event, { url, body }) => {
   try {
+    const parsed = new URL(url);
+    const isTrustedHost = parsed.protocol === "https:" && parsed.hostname === "knull-activation.sloanbrack.workers.dev";
+    const isTrustedPath = parsed.pathname === "/activate";
+    if (!isTrustedHost || !isTrustedPath) {
+      return { error: "Blocked untrusted activation endpoint" };
+    }
+
     const res = await nodeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1497,6 +1522,8 @@ ipcMain.handle("cf-request", async (_event, { url, body }) => {
     return { error: e.message };
   }
 });
+
+ipcMain.handle("get-device-id", () => getOrCreateDeviceId());
 
 // ── IPC: window controls ──────────────────────────────────────────────────────
 ipcMain.handle("window-minimize", () => { if (mainWindow) mainWindow.minimize(); });

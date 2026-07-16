@@ -3,8 +3,11 @@ import { Outlet, Link, useLocation } from "react-router-dom";
 import { Shield, MonitorPlay, LayoutDashboard, Terminal, Radio, ListChecks, ShieldCheck, ScrollText, User, Settings, Users } from "lucide-react";
 import { db } from "@/lib/db";
 import Activate from "@/pages/Activate";
+import { cfRequest, getDeviceId } from "@/lib/electronBridge";
 
 const CF_ENDPOINT = "https://knull-activation.sloanbrack.workers.dev/activate";
+const LICENSE_REFRESH_MS = 10 * 60 * 1000;
+const OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -25,6 +28,71 @@ export default function AppLayout() {
 
   useEffect(() => { checkActivation(); }, []);
 
+  useEffect(() => {
+    if (authState !== "activated") return;
+    const timer = setInterval(() => {
+      refreshLicense().catch(() => {});
+    }, LICENSE_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [authState]);
+
+  const resolveDeviceId = async () => {
+    const fallbackKey = "knull_device_id";
+    try {
+      const id = await getDeviceId();
+      if (id && !String(id).includes("Not running in Electron")) return id;
+    } catch {}
+
+    let local = localStorage.getItem(fallbackKey);
+    if (!local) {
+      local = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(fallbackKey, local);
+    }
+    return local;
+  };
+
+  const requestLicense = async (action, record, extras = {}) => {
+    const deviceId = await resolveDeviceId();
+    return cfRequest(CF_ENDPOINT, {
+      action,
+      discord_id: record.discord_id,
+      device_id: deviceId,
+      ...extras,
+    });
+  };
+
+  const refreshLicense = async () => {
+    const rows = await db.DiscordVerify.list();
+    const record = (Array.isArray(rows) ? rows : [])[0];
+    if (!record?.verified || !record?.discord_id) return;
+
+    let data = await requestLicense("refresh", record, {
+      session_token: record.license_session_token || null,
+    });
+
+    // Fallback to full handshake when no token exists yet or refresh token expired.
+    if (data?.error && !data?.blocked) {
+      data = await requestLicense("handshake", record, {
+        client_nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      });
+    }
+
+    if (data?.blocked) {
+      await db.DiscordVerify.update(record.id, { verified: false, license_session_token: null });
+      setAuthState("blocked");
+      return;
+    }
+
+    if (data?.ok && data?.session_token) {
+      await db.DiscordVerify.update(record.id, {
+        last_checked: new Date().toISOString(),
+        license_session_token: data.session_token,
+        license_expires_at: data.expires_at,
+        license_refresh_after: data.refresh_after,
+      });
+    }
+  };
+
   const checkActivation = async () => {
     const rows = await db.DiscordVerify.list();
     const record = (Array.isArray(rows) ? rows : [])[0];
@@ -34,31 +102,31 @@ export default function AppLayout() {
       return;
     }
 
-    // Re-validate with Cloudflare on every launch
+    // Re-validate with Cloudflare on every launch + establish a short-lived session token.
     try {
-      let data;
-      if (typeof window !== "undefined" && window.electronAPI?.cfRequest) {
-        data = await window.electronAPI.cfRequest({ url: CF_ENDPOINT, body: { action: "validate", discord_id: record.discord_id } });
-      } else {
-        const res = await fetch(CF_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "validate", discord_id: record.discord_id }),
-        });
-        data = await res.json();
-      }
+      const data = await requestLicense("handshake", record, {
+        client_nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      });
+
       if (data?.blocked || data?.error) {
         // Mark locally as unverified so they see the gate
-        await db.DiscordVerify.update(record.id, { verified: false });
+        await db.DiscordVerify.update(record.id, { verified: false, license_session_token: null });
         setAuthState("blocked");
       } else {
-        // Update last_checked
-        await db.DiscordVerify.update(record.id, { last_checked: new Date().toISOString() });
+        // Update last_checked + license token material (if available)
+        await db.DiscordVerify.update(record.id, {
+          last_checked: new Date().toISOString(),
+          license_session_token: data.session_token || record.license_session_token || null,
+          license_expires_at: data.expires_at || record.license_expires_at || null,
+          license_refresh_after: data.refresh_after || record.license_refresh_after || null,
+        });
         setAuthState("activated");
       }
     } catch {
-      // If CF is unreachable, allow cached activation to pass (offline grace)
-      setAuthState("activated");
+      // Offline grace: allow cached sessions for a bounded time window.
+      const lastSeenMs = record.last_checked ? new Date(record.last_checked).getTime() : 0;
+      if (lastSeenMs && Date.now() - lastSeenMs < OFFLINE_GRACE_MS) setAuthState("activated");
+      else setAuthState("needs_activation");
     }
   };
 
@@ -78,7 +146,7 @@ export default function AppLayout() {
           ⛔ Your access has been revoked. You must re-verify Discord membership.
         </div>
       )}
-      <Activate onActivated={() => setAuthState("activated")} />
+      <Activate onActivated={() => checkActivation()} />
     </>
   );
 
