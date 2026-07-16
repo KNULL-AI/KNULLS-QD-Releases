@@ -375,6 +375,17 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
   const [guildChannels, setGuildChannels] = useState([]);
   const [loadingGuilds, setLoadingGuilds] = useState(false);
   const [loadingChannels, setLoadingChannels] = useState(false);
+  const [guildSearch, setGuildSearch] = useState("");
+  const [channelSearch, setChannelSearch] = useState("");
+
+  useEffect(() => {
+    if (!open || monitor.auth_mode !== "user_token" || userToken) return;
+    (async () => {
+      const rows = await db.DiscordVerify.list().catch(() => []);
+      const rec = Array.isArray(rows) ? rows.find((r) => r?.verified && r?.user_token) || rows[0] : null;
+      if (rec?.user_token) setUserToken(rec.user_token);
+    })();
+  }, [open, monitor.auth_mode, userToken]);
 
   const currentToken = monitor.auth_mode === "user_token" ? userToken : botToken;
   const authHeader = monitor.auth_mode === "bot_token" ? `Bot ${currentToken}` : currentToken;
@@ -383,6 +394,7 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
     if (!currentToken.trim()) { toast.error("Paste your token first"); return; }
     setLoadingGuilds(true);
     setGuilds([]); setGuildChannels([]); setSelectedGuildId("");
+    setGuildSearch(""); setChannelSearch("");
     const result = await fetchDiscordGuilds(authHeader);
     setLoadingGuilds(false);
     if (result.error) { toast.error(`Failed: ${result.error}`); return; }
@@ -393,6 +405,7 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
   const loadChannels = async (guildId) => {
     setSelectedGuildId(guildId);
     setGuildChannels([]);
+    setChannelSearch("");
     if (!guildId) return;
     setLoadingChannels(true);
     const result = await fetchDiscordGuildChannels(authHeader, guildId);
@@ -420,6 +433,13 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
 
   const submit = async () => {
     setLoading(true);
+    if (monitor.auth_mode === "user_token" && userToken.trim()) {
+      const rows = await db.DiscordVerify.list().catch(() => []);
+      const rec = Array.isArray(rows) ? rows[0] : null;
+      if (rec?.id) {
+        await db.DiscordVerify.update(rec.id, { user_token: userToken.trim() }).catch(() => {});
+      }
+    }
     await db.DiscordMonitor.update(monitor.id, {
       user_token: monitor.auth_mode === "user_token" ? userToken : monitor.user_token,
       bot_token: monitor.auth_mode === "bot_token" ? botToken : monitor.bot_token,
@@ -476,8 +496,16 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
             {guilds.length > 0 && (
               <div>
                 <Label className="text-[10px] text-gray-500 font-mono">Select Server</Label>
+                <Input
+                  value={guildSearch}
+                  onChange={(e) => setGuildSearch(e.target.value)}
+                  placeholder="Search servers..."
+                  className="bg-white/5 border-white/10 font-mono text-[11px] mt-1 h-7"
+                />
                 <div className="mt-0.5 max-h-48 overflow-y-auto border border-white/10 rounded-sm bg-[#1a1a24] space-y-px p-1">
-                  {guilds.map((g) => {
+                  {guilds
+                    .filter((g) => g.name?.toLowerCase().includes(guildSearch.toLowerCase()))
+                    .map((g) => {
                     const iconUrl = g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=32` : null;
                     const initials = g.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
                     return (
@@ -505,8 +533,17 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
               </div>
             )}
             {guildChannels.length > 0 && (
-              <div className="max-h-36 overflow-y-auto space-y-0.5 border border-white/5 rounded-sm p-1.5 bg-black/20">
-                {guildChannels.map((ch) => {
+              <div className="space-y-1.5">
+                <Input
+                  value={channelSearch}
+                  onChange={(e) => setChannelSearch(e.target.value)}
+                  placeholder="Search channels..."
+                  className="bg-white/5 border-white/10 font-mono text-[11px] h-7"
+                />
+                <div className="max-h-36 overflow-y-auto space-y-0.5 border border-white/5 rounded-sm p-1.5 bg-black/20">
+                  {guildChannels
+                    .filter((ch) => ch.name?.toLowerCase().includes(channelSearch.toLowerCase()))
+                    .map((ch) => {
                   const isSelected = channels.some((c) => c.channel_id === ch.id);
                   return (
                     <button
@@ -520,6 +557,7 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
                     </button>
                   );
                 })}
+                </div>
               </div>
             )}
 
@@ -1070,6 +1108,17 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
   const [guildChannels, setGuildChannels] = useState([]);
   const [loadingGuilds, setLoadingGuilds] = useState(false);
   const [loadingChannels, setLoadingChannels] = useState(false);
+  const [guildSearch, setGuildSearch] = useState("");
+  const [channelSearch, setChannelSearch] = useState("");
+
+  useEffect(() => {
+    if (!open || authMode !== "user_token" || userToken) return;
+    (async () => {
+      const rows = await db.DiscordVerify.list().catch(() => []);
+      const rec = Array.isArray(rows) ? rows.find((r) => r?.verified && r?.user_token) || rows[0] : null;
+      if (rec?.user_token) setUserToken(rec.user_token);
+    })();
+  }, [open, authMode, userToken]);
 
   const currentToken = authMode === "user_token" ? userToken : botToken;
   const authHeader = authMode === "bot_token" ? `Bot ${currentToken}` : currentToken;
@@ -1078,6 +1127,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
     if (!currentToken.trim()) { toast.error("Paste your token first"); return; }
     setLoadingGuilds(true);
     setGuilds([]); setGuildChannels([]); setSelectedGuildId("");
+    setGuildSearch(""); setChannelSearch("");
     const result = await fetchDiscordGuilds(authHeader);
     setLoadingGuilds(false);
     if (result.error) { toast.error(`Failed: ${result.error}`); return; }
@@ -1088,6 +1138,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
   const loadChannels = async (guildId) => {
     setSelectedGuildId(guildId);
     setGuildChannels([]);
+    setChannelSearch("");
     if (!guildId) return;
     setLoadingChannels(true);
     const result = await fetchDiscordGuildChannels(authHeader, guildId);
@@ -1122,6 +1173,13 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
   const submit = async () => {
     if (!canSubmit) return;
     setLoading(true);
+    if (authMode === "user_token" && userToken.trim()) {
+      const rows = await db.DiscordVerify.list().catch(() => []);
+      const rec = Array.isArray(rows) ? rows[0] : null;
+      if (rec?.id) {
+        await db.DiscordVerify.update(rec.id, { user_token: userToken.trim() }).catch(() => {});
+      }
+    }
     await db.DiscordMonitor.create({
       name,
       retailer_type: retailerType,
@@ -1139,6 +1197,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
     setOpen(false); setLoading(false);
     setName(""); setUserToken(""); setBotToken(""); setSelectedTaskGroupIds([]);
     setChannels([]); setGuilds([]); setGuildChannels([]); setSelectedGuildId("");
+    setGuildSearch(""); setChannelSearch("");
     setCooldownSeconds("600"); setRetailerType("standard");
     onAdded();
   };
@@ -1253,8 +1312,16 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
             {guilds.length > 0 && (
               <div>
                 <Label className="text-[10px] text-gray-500 font-mono">Select Server</Label>
+                <Input
+                  value={guildSearch}
+                  onChange={(e) => setGuildSearch(e.target.value)}
+                  placeholder="Search servers..."
+                  className="bg-white/5 border-white/10 font-mono text-[11px] mt-1 h-7"
+                />
                 <div className="mt-0.5 max-h-48 overflow-y-auto border border-white/10 rounded-sm bg-[#1a1a24] space-y-px p-1">
-                  {guilds.map((g) => {
+                  {guilds
+                    .filter((g) => g.name?.toLowerCase().includes(guildSearch.toLowerCase()))
+                    .map((g) => {
                     const iconUrl = g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=32` : null;
                     const initials = g.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
                     return (
@@ -1283,8 +1350,17 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
               </div>
             )}
             {guildChannels.length > 0 && (
-              <div className="max-h-36 overflow-y-auto space-y-0.5 border border-white/5 rounded-sm p-1.5 bg-black/20">
-                {guildChannels.map((ch) => {
+              <div className="space-y-1.5">
+                <Input
+                  value={channelSearch}
+                  onChange={(e) => setChannelSearch(e.target.value)}
+                  placeholder="Search channels..."
+                  className="bg-white/5 border-white/10 font-mono text-[11px] h-7"
+                />
+                <div className="max-h-36 overflow-y-auto space-y-0.5 border border-white/5 rounded-sm p-1.5 bg-black/20">
+                  {guildChannels
+                    .filter((ch) => ch.name?.toLowerCase().includes(channelSearch.toLowerCase()))
+                    .map((ch) => {
                   const isSelected = channels.some((c) => c.channel_id === ch.id);
                   return (
                     <button
@@ -1298,6 +1374,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
                     </button>
                   );
                 })}
+                </div>
               </div>
             )}
 
