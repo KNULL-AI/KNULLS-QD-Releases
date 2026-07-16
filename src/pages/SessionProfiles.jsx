@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { User, Plus, Trash2, Edit2, Shield, Monitor } from "lucide-react";
+import { User, Plus, Trash2, Edit2, Monitor } from "lucide-react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

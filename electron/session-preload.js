@@ -33,6 +33,50 @@ try {
   });
 } catch (_) {}
 
+// 2b. Basic user-agent / platform / vendor spoofing for page JS
+try {
+  const fakeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  Object.defineProperty(navigator, "userAgent", { get: () => fakeUA, enumerable: true, configurable: true });
+  Object.defineProperty(navigator, "appVersion", { get: () => fakeUA, enumerable: true, configurable: true });
+  Object.defineProperty(navigator, "platform", { get: () => "Win32", enumerable: true, configurable: true });
+  Object.defineProperty(navigator, "vendor", { get: () => "Google Inc.", enumerable: true, configurable: true });
+  Object.defineProperty(navigator, "maxTouchPoints", { get: () => 0, enumerable: true, configurable: true });
+} catch (_) {}
+
+// 2c. navigator.userAgentData for modern Chromium UA-CH checks
+try {
+  const fakeUAData = {
+    brands: [
+      { brand: "Google Chrome", version: "131" },
+      { brand: "Chromium", version: "131" },
+      { brand: "Not A(Brand)", version: "24" },
+    ],
+    mobile: false,
+    platform: "Windows",
+    getHighEntropyValues: async (hints) => {
+      const base = {
+        architecture: "x86",
+        bitness: "64",
+        model: "",
+        platform: "Windows",
+        platformVersion: "10.0.0",
+        uaFullVersion: "131.0.0.0",
+        fullVersionList: [
+          { brand: "Google Chrome", version: "131.0.0.0" },
+          { brand: "Chromium", version: "131.0.0.0" },
+          { brand: "Not A(Brand)", version: "24.0.0.0" },
+        ],
+      };
+      if (!Array.isArray(hints)) return base;
+      return hints.reduce((acc, key) => {
+        if (Object.prototype.hasOwnProperty.call(base, key)) acc[key] = base[key];
+        return acc;
+      }, {});
+    },
+  };
+  Object.defineProperty(navigator, "userAgentData", { get: () => fakeUAData, enumerable: true, configurable: true });
+} catch (_) {}
+
 // 3. Spoof navigator.plugins — empty list is a dead giveaway
 try {
   const fakePlugins = [
@@ -339,7 +383,10 @@ ipcRenderer.on("autofill-credentials", (_e, { email, password }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // VERIFICATION CODE AUTO-FILL — triggered by main process when IMAP finds a code
 // ─────────────────────────────────────────────────────────────────────────────
-ipcRenderer.on("inject-verification-code", (_e, code) => {
+ipcRenderer.on("inject-verification-code", (_e, payload) => {
+  const code = typeof payload === "object" && payload !== null ? payload.code : payload;
+  const fallbackPassword = typeof payload === "object" && payload !== null ? payload.password : null;
+
   function fillInput(el, value) {
     try {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
@@ -352,6 +399,34 @@ ipcRenderer.on("inject-verification-code", (_e, code) => {
   }
   function visible(el) { return el.offsetParent !== null || el.getClientRects().length > 0; }
 
+  // Some Walmart flows ask for password again after OTP submission.
+  // Retry for a short window and submit automatically when that prompt appears.
+  function handlePostCodePasswordChallenge(password) {
+    if (!password) return;
+    const started = Date.now();
+    const maxMs = 30000;
+
+    const tryFill = () => {
+      const pw = Array.from(document.querySelectorAll('input[type="password"]')).find((el) => visible(el));
+      if (pw) {
+        fillInput(pw, String(password));
+        pw.focus();
+        setTimeout(() => {
+          const btn = Array.from(document.querySelectorAll('button[type="submit"], button')).find((b) => {
+            if (!visible(b) || b.disabled) return false;
+            const t = (b.textContent || "").trim().toLowerCase();
+            return t === "continue" || t === "sign in" || t.includes("continue");
+          });
+          if (btn) btn.click();
+        }, 300);
+        return;
+      }
+      if (Date.now() - started < maxMs) setTimeout(tryFill, 600);
+    };
+
+    setTimeout(tryFill, 900);
+  }
+
   // Walmart enables its primary submit action only after React processes every
   // OTP input event. Wait for that state instead of clicking a generic button
   // (which could select the passkey alternative on this screen).
@@ -363,6 +438,7 @@ ipcRenderer.on("inject-verification-code", (_e, code) => {
       );
       if (signIn) {
         signIn.click();
+        handlePostCodePasswordChallenge(fallbackPassword);
         return;
       }
       if (Date.now() - started < 5000) setTimeout(trySubmit, 150);
@@ -396,6 +472,8 @@ ipcRenderer.on("inject-verification-code", (_e, code) => {
     (el) => visible(el) && !el.value && textTypes.includes((el.type || "text").toLowerCase())
   );
   if (any.length) { fillInput(any[0], String(code)); submitVerification(); }
+
+  handlePostCodePasswordChallenge(fallbackPassword);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

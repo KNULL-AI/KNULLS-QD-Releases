@@ -285,7 +285,7 @@ function DropCard({ drop, accounts, proxyGroups, proxies, onUpdate, onDelete }) 
         walmart_account_id: acc.id,
         walmart_account_email: acc.email,
       });
-      await launchBrowser({ sessionId: sess.id, url: LOGIN_URL, proxy, browser: "chrome" });
+      await launchBrowser({ sessionId: sess.id, url: LOGIN_URL, proxy, browser: "chrome", partitionKey: `walmart-account-${acc.id}` });
       await db.WalmartAccount.update(acc.id, { status: "needs_code", last_used: nowIso });
       sessionRecs.push(sess.id);
     }

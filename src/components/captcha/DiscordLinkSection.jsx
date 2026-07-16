@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import {
-  MessageSquare, CheckCircle2, XCircle, Loader2, Hash,
+import { CheckCircle2, XCircle, Loader2, Hash,
   Lock, User, Info, RefreshCw, Eye, EyeOff
 } from "lucide-react";
 import { db } from "@/lib/db";

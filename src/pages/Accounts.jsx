@@ -193,7 +193,15 @@ export default function Accounts() {
       walmart_account_id: acc.id,
       walmart_account_email: acc.email,
     });
-    await launchBrowser({ sessionId: sess.id, url: sess.target_url, proxy, browser: "chrome", manualOpen: true, credentials: { email: acc.email, password: acc.password } });
+    await launchBrowser({
+      sessionId: sess.id,
+      url: sess.target_url,
+      proxy,
+      browser: "chrome",
+      manualOpen: true,
+      credentials: { email: acc.email, password: acc.password },
+      partitionKey: `walmart-account-${acc.id}`,
+    });
     await db.WalmartAccount.update(acc.id, { status: "needs_code", last_used: now });
     toast.success(`Launched login for ${acc.label}`);
     load();
