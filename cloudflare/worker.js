@@ -46,6 +46,8 @@ const ABUSE_MAX_BAD_REFRESH_1H = 8;
 const ABUSE_ENFORCE_BLOCKS_DEFAULT = false;
 const ABUSE_BLOCK_ON_SOFT_SIGNALS_DEFAULT = false;
 const ALLOW_SELF_UNBLOCK_ON_REGISTER_DEFAULT = true;
+const MEMBERSHIP_RUNTIME_FAILS_TO_LOCK_DEFAULT = 3;
+const MEMBERSHIP_RUNTIME_FAIL_WINDOW_SECONDS = 10 * 60;
 
 let abuseSchemaInitPromise = null;
 
@@ -71,6 +73,10 @@ export default {
       await env.DB.prepare(
         "UPDATE users SET blocked = ? WHERE discord_id = ?"
       ).bind(blocked ? 1 : 0, discord_id).run();
+      if (blocked && discord_id) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action: "admin_block", deviceId: null, outcome: "deny.blocked", reason: "admin_manual_block" });
+        await emitLockoutAlert(env, { discordId: discord_id, action: "admin_block", deviceId: null, reason: "admin_manual_block" });
+      }
       return json({ ok: true }, 200, cors);
     }
 
@@ -101,6 +107,31 @@ export default {
 
       const { results } = await env.DB.prepare(query).bind(...binds).all();
       return json({ events: results }, 200, cors);
+    }
+
+    // ── Admin: lockout-focused feed (discord_id + reason) ───────────────────
+    if (path === "/admin/lockouts" && request.method === "GET") {
+      const adminKey = request.headers.get("Authorization")?.replace("Bearer ", "");
+      if (adminKey !== env.ADMIN_KEY) return json({ error: "Unauthorized" }, 403, cors);
+
+      const limit = Math.min(Number(url.searchParams.get("limit") || 100), 500);
+      const discordId = url.searchParams.get("discord_id")?.trim();
+
+      let query = `
+        SELECT discord_id, action, outcome, reason, country, created_at
+        FROM abuse_events
+        WHERE outcome = 'deny.blocked'
+      `;
+      const binds = [];
+      if (discordId) {
+        query += " AND discord_id = ?";
+        binds.push(discordId);
+      }
+      query += " ORDER BY created_ts DESC LIMIT ?";
+      binds.push(limit);
+
+      const { results } = await env.DB.prepare(query).bind(...binds).all();
+      return json({ lockouts: results }, 200, cors);
     }
 
     // ── Admin: one-time abuse schema migration ───────────────────────────────
@@ -154,6 +185,7 @@ export default {
           await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "allow", reason: "self_unblock_register" });
         } else {
           await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
+          await emitLockoutAlert(env, { discordId: discord_id, action, deviceId, reason: "user_blocked" });
           return json({ error: "Your access has been revoked by an administrator.", blocked: true }, 403, cors);
         }
       }
@@ -188,15 +220,21 @@ export default {
       }
       if (user.blocked) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
+        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId, reason: "user_blocked" });
         return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
       }
 
-      // Re-check guild membership via bot on every launch (graceful if no bot token)
-      const memberCheck = await verifyGuildMember(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discord_id);
-      if (!memberCheck.ok) {
-        // Fail-open: bot membership checks can false-negative due token/intents/permissions.
-        // Registration already performs a self-token guild check, so do not auto-revoke here.
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "flagged", reason: `membership_check_failed:${memberCheck.reason || "unknown"}` });
+      // Re-check guild membership on every launch with safe-but-strict runtime policy.
+      const runtimeMembership = await enforceRuntimeMembership(env, request, {
+        discordId: discord_id,
+        action,
+        deviceId,
+      });
+      if (runtimeMembership.blocked) {
+        return json({ error: "Access revoked: not in required server", blocked: true }, 403, cors);
+      }
+      if (runtimeMembership.flagged) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "flagged", reason: runtimeMembership.reason || "membership_check_uncertain" });
       }
 
       // Update last_validated timestamp
@@ -222,6 +260,7 @@ export default {
       }
       if (user.blocked) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
+        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: "user_blocked" });
         return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
       }
 
@@ -231,13 +270,20 @@ export default {
       }
       if (abuseDecision.blocked) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: abuseDecision.reason });
+        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: abuseDecision.reason || "abuse_policy_block" });
         return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
       }
 
-      const memberCheck = await verifyGuildMember(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discord_id);
-      if (!memberCheck.ok) {
-        // Fail-open: avoid hard-block loop from bot-side false negatives.
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: `membership_check_failed:${memberCheck.reason || "unknown"}` });
+      const runtimeMembership = await enforceRuntimeMembership(env, request, {
+        discordId: discord_id,
+        action,
+        deviceId: device_id,
+      });
+      if (runtimeMembership.blocked) {
+        return json({ error: "Access revoked: not in required server", blocked: true }, 403, cors);
+      }
+      if (runtimeMembership.flagged) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: runtimeMembership.reason || "membership_check_uncertain" });
       }
 
       const now = Math.floor(Date.now() / 1000);
@@ -280,7 +326,10 @@ export default {
         if (abuseDecision.reason && !abuseDecision.blocked) {
           await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: abuseDecision.reason });
         }
-        if (abuseDecision.blocked) return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+        if (abuseDecision.blocked) {
+          await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: abuseDecision.reason || "abuse_policy_block" });
+          return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+        }
         return json({ error: "Invalid session token" }, 403, cors);
       }
       if (claims.payload.sub !== discord_id || claims.payload.did !== device_id) {
@@ -289,7 +338,10 @@ export default {
         if (abuseDecision.reason && !abuseDecision.blocked) {
           await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: abuseDecision.reason });
         }
-        if (abuseDecision.blocked) return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+        if (abuseDecision.blocked) {
+          await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: abuseDecision.reason || "abuse_policy_block" });
+          return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+        }
         return json({ error: "Session token subject mismatch" }, 403, cors);
       }
 
@@ -300,6 +352,7 @@ export default {
       }
       if (user.blocked) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
+        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: "user_blocked" });
         return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
       }
 
@@ -309,6 +362,7 @@ export default {
       }
       if (abuseDecision.blocked) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: abuseDecision.reason });
+        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: abuseDecision.reason || "abuse_policy_block" });
         return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
       }
 
@@ -391,6 +445,95 @@ async function verifyGuildMemberSelf(userToken, guildId) {
   } catch {
     return { ok: true }; // network error — grant benefit of the doubt
   }
+}
+
+async function verifyGuildMemberWithRetry(botToken, guildId, userId) {
+  const first = await verifyGuildMember(botToken, guildId, userId);
+  if (!first || first.ok || first.reason === "not_member") return first;
+  const second = await verifyGuildMember(botToken, guildId, userId);
+  if (second?.reason === "not_member") return second;
+  return first;
+}
+
+function membershipRuntimeFailThreshold(env) {
+  const raw = Number(env.MEMBERSHIP_RUNTIME_FAILS_TO_LOCK);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : MEMBERSHIP_RUNTIME_FAILS_TO_LOCK_DEFAULT;
+}
+
+function membershipRuntimeFailWindowSeconds(env) {
+  const raw = Number(env.MEMBERSHIP_RUNTIME_FAIL_WINDOW_SECONDS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : MEMBERSHIP_RUNTIME_FAIL_WINDOW_SECONDS;
+}
+
+async function countRecentMembershipUncertain(env, discordId) {
+  if (!discordId) return 0;
+  const now = Math.floor(Date.now() / 1000);
+  const sinceTs = now - membershipRuntimeFailWindowSeconds(env);
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM abuse_events WHERE discord_id = ? AND created_ts >= ? AND outcome = 'flagged' AND reason LIKE 'membership_check_failed:%'"
+  ).bind(discordId, sinceTs).first();
+  return Number(row?.c || 0);
+}
+
+async function emitLockoutAlert(env, payload) {
+  const webhook = env.ADMIN_ALERT_WEBHOOK;
+  if (!webhook) return;
+  try {
+    const body = {
+      content: [
+        "KNULL access lockout detected",
+        `discord_id: ${payload.discordId || "unknown"}`,
+        `reason: ${payload.reason || "unspecified"}`,
+        `action: ${payload.action || "unknown"}`,
+        `device_id: ${payload.deviceId || "unknown"}`,
+      ].join("\n"),
+    };
+    await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {}
+}
+
+async function setBlockedWithAlert(env, request, { discordId, action, deviceId, reason }) {
+  await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discordId).run();
+  await logAbuseEvent(env, request, { discordId, action, deviceId, outcome: "deny.blocked", reason });
+  await emitLockoutAlert(env, { discordId, action, deviceId, reason });
+}
+
+async function enforceRuntimeMembership(env, request, { discordId, action, deviceId }) {
+  const memberCheck = await verifyGuildMemberWithRetry(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discordId);
+  if (memberCheck?.ok) return { blocked: false, flagged: false };
+
+  const reason = memberCheck?.reason || "unknown";
+  if (reason === "not_member") {
+    await setBlockedWithAlert(env, request, {
+      discordId,
+      action,
+      deviceId,
+      reason: "membership_not_in_required_guild",
+    });
+    return { blocked: true, flagged: false, reason: "membership_not_in_required_guild" };
+  }
+
+  // For uncertain Discord responses, only lock after repeated failures in a short window.
+  const priorFails = await countRecentMembershipUncertain(env, discordId);
+  const threshold = membershipRuntimeFailThreshold(env);
+  const currentFails = priorFails + 1;
+  const flaggedReason = `membership_check_failed:${reason}`;
+
+  if (currentFails >= threshold) {
+    await setBlockedWithAlert(env, request, {
+      discordId,
+      action,
+      deviceId,
+      reason: `membership_check_unreliable_threshold:${reason}`,
+    });
+    return { blocked: true, flagged: false, reason: `membership_check_unreliable_threshold:${reason}` };
+  }
+
+  return { blocked: false, flagged: true, reason: flaggedReason };
 }
 
 async function ensureAbuseSchema(env) {
