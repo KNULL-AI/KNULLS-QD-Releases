@@ -29,6 +29,7 @@
  * Set these secrets via: wrangler secret put DISCORD_BOT_TOKEN
  *   DISCORD_BOT_TOKEN — your bot token (must be in the server with GUILD_MEMBER intent)
  *   ADMIN_KEY         — a secret string you use for admin endpoints
+ *   LICENSE_SIGNING_KEY — secret key used to sign short-lived license session tokens
  *
  * Config constants below:
  */
@@ -36,6 +37,12 @@
 const REQUIRED_GUILD_ID   = "1369077918244012072";
 const REQUIRED_CHANNEL_ID = "1369077919758155940";
 const MONTHLY_USER_LIMIT  = 100;
+const LICENSE_TTL_SECONDS = 30 * 60;
+const LICENSE_REFRESH_AFTER_SECONDS = 10 * 60;
+const ABUSE_MAX_DISTINCT_DEVICES_24H = 4;
+const ABUSE_MAX_DISTINCT_COUNTRIES_24H = 3;
+const ABUSE_MAX_DENY_EVENTS_10M = 12;
+const ABUSE_MAX_BAD_REFRESH_1H = 8;
 
 export default {
   async fetch(request, env) {
@@ -50,6 +57,8 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname;
+
+    await ensureAbuseSchema(env);
 
     // ── Admin: block/unblock a user ──────────────────────────────────────────
     if (path === "/admin/block" && request.method === "POST") {
@@ -70,6 +79,27 @@ export default {
       return json({ users: results }, 200, cors);
     }
 
+    // ── Admin: inspect abuse events ───────────────────────────────────────────
+    if (path === "/admin/abuse-events" && request.method === "GET") {
+      const adminKey = request.headers.get("Authorization")?.replace("Bearer ", "");
+      if (adminKey !== env.ADMIN_KEY) return json({ error: "Unauthorized" }, 403, cors);
+
+      const limit = Math.min(Number(url.searchParams.get("limit") || 200), 500);
+      const discordId = url.searchParams.get("discord_id")?.trim();
+
+      let query = "SELECT * FROM abuse_events";
+      const binds = [];
+      if (discordId) {
+        query += " WHERE discord_id = ?";
+        binds.push(discordId);
+      }
+      query += " ORDER BY created_ts DESC LIMIT ?";
+      binds.push(limit);
+
+      const { results } = await env.DB.prepare(query).bind(...binds).all();
+      return json({ events: results }, 200, cors);
+    }
+
     // ── All other routes expect POST with JSON body ───────────────────────────
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, cors);
 
@@ -81,18 +111,34 @@ export default {
     // ── Register: new user activation ────────────────────────────────────────
     if (action === "register") {
       const { username, discriminator, guild_id, channel_id, user_token } = body;
+      const deviceId = body.device_id || null;
 
-      if (!discord_id || !username) return json({ error: "Missing discord_id or username" }, 400, cors);
-      if (guild_id !== REQUIRED_GUILD_ID) return json({ error: "Invalid server" }, 403, cors);
-      if (channel_id !== REQUIRED_CHANNEL_ID) return json({ error: "Invalid channel" }, 403, cors);
+      if (!discord_id || !username) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.missing_fields", reason: "missing_discord_or_username" });
+        return json({ error: "Missing discord_id or username" }, 400, cors);
+      }
+      if (guild_id !== REQUIRED_GUILD_ID) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.invalid_guild", reason: "invalid_server" });
+        return json({ error: "Invalid server" }, 403, cors);
+      }
+      if (channel_id !== REQUIRED_CHANNEL_ID) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.invalid_channel", reason: "invalid_channel" });
+        return json({ error: "Invalid channel" }, 403, cors);
+      }
 
       // Verify the user is actually in the guild using their own token
       const memberCheck = await verifyGuildMemberSelf(user_token, REQUIRED_GUILD_ID);
-      if (!memberCheck.ok) return json({ error: "You are not a member of the required server", blocked: false }, 403, cors);
+      if (!memberCheck.ok) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.not_in_required_guild", reason: "membership_check_failed" });
+        return json({ error: "You are not a member of the required server", blocked: false }, 403, cors);
+      }
 
       // Check if already registered and blocked
       const existing = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
-      if (existing?.blocked) return json({ error: "Your access has been revoked by an administrator.", blocked: true }, 403, cors);
+      if (existing?.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
+        return json({ error: "Your access has been revoked by an administrator.", blocked: true }, 403, cors);
+      }
 
       const now = new Date().toISOString();
       if (existing) {
@@ -105,22 +151,34 @@ export default {
         ).bind(discord_id, username, discriminator ?? "0", guild_id, channel_id, now, now).run();
       }
 
+      await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "allow", reason: "register_success" });
       return json({ ok: true, discord_id, username }, 200, cors);
     }
 
     // ── Validate: called on every app launch ──────────────────────────────────
     if (action === "validate") {
-      if (!discord_id) return json({ error: "Missing discord_id" }, 400, cors);
+      const deviceId = body.device_id || null;
+      if (!discord_id) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.missing_discord_id", reason: "missing_discord_id" });
+        return json({ error: "Missing discord_id" }, 400, cors);
+      }
 
       const user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
-      if (!user) return json({ error: "Not registered", blocked: false }, 403, cors);
-      if (user.blocked) return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+      if (!user) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.not_registered", reason: "not_registered" });
+        return json({ error: "Not registered", blocked: false }, 403, cors);
+      }
+      if (user.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
+        return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+      }
 
       // Re-check guild membership via bot on every launch (graceful if no bot token)
       const memberCheck = await verifyGuildMember(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discord_id);
       if (!memberCheck.ok) {
         // Auto-block if they left the server
         await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discord_id).run();
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "auto_block_left_guild" });
         return json({ error: "You have been removed from the required server — access revoked.", blocked: true }, 403, cors);
       }
 
@@ -128,7 +186,126 @@ export default {
       await env.DB.prepare("UPDATE users SET last_validated = ? WHERE discord_id = ?")
         .bind(new Date().toISOString(), discord_id).run();
 
+      await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "allow", reason: "validate_success" });
       return json({ ok: true, solves_used: user.solves_used ?? 0, monthly_limit: MONTHLY_USER_LIMIT }, 200, cors);
+    }
+
+    // ── Handshake: issue short-lived signed session token ─────────────────────
+    if (action === "handshake") {
+      const { device_id } = body;
+      if (!discord_id || !device_id) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id || null, outcome: "deny.missing_fields", reason: "missing_discord_or_device" });
+        return json({ error: "Missing discord_id or device_id" }, 400, cors);
+      }
+
+      const user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
+      if (!user) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.not_registered", reason: "not_registered" });
+        return json({ error: "Not registered", blocked: false }, 403, cors);
+      }
+      if (user.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
+        return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+      }
+
+      const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+      if (abuseDecision.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: abuseDecision.reason });
+        return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+      }
+
+      const memberCheck = await verifyGuildMember(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discord_id);
+      if (!memberCheck.ok) {
+        await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discord_id).run();
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "auto_block_left_guild" });
+        return json({ error: "You have been removed from the required server — access revoked.", blocked: true }, 403, cors);
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      const exp = now + LICENSE_TTL_SECONDS;
+      const payload = {
+        sub: discord_id,
+        did: device_id,
+        iat: now,
+        exp,
+        ver: 1,
+      };
+
+      const sessionToken = await issueSessionToken(payload, env.LICENSE_SIGNING_KEY || env.ADMIN_KEY || "");
+      await env.DB.prepare("UPDATE users SET last_validated = ? WHERE discord_id = ?")
+        .bind(new Date().toISOString(), discord_id).run();
+
+      await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "allow", reason: "handshake_success" });
+
+      return json({
+        ok: true,
+        session_token: sessionToken,
+        expires_at: new Date(exp * 1000).toISOString(),
+        refresh_after: new Date((now + LICENSE_REFRESH_AFTER_SECONDS) * 1000).toISOString(),
+      }, 200, cors);
+    }
+
+    // ── Refresh: rotate short-lived signed session token ──────────────────────
+    if (action === "refresh") {
+      const { device_id, session_token } = body;
+      if (!discord_id || !device_id || !session_token) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id || null, outcome: "deny.missing_fields", reason: "missing_discord_device_or_token" });
+        return json({ error: "Missing discord_id, device_id, or session_token" }, 400, cors);
+      }
+
+      const secret = env.LICENSE_SIGNING_KEY || env.ADMIN_KEY || "";
+      const claims = await verifySessionToken(session_token, secret);
+      if (!claims?.ok) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.invalid_token", reason: "invalid_session_token" });
+        const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+        if (abuseDecision.blocked) return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+        return json({ error: "Invalid session token" }, 403, cors);
+      }
+      if (claims.payload.sub !== discord_id || claims.payload.did !== device_id) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.subject_mismatch", reason: "token_subject_mismatch" });
+        const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+        if (abuseDecision.blocked) return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+        return json({ error: "Session token subject mismatch" }, 403, cors);
+      }
+
+      const user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
+      if (!user) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.not_registered", reason: "not_registered" });
+        return json({ error: "Not registered", blocked: false }, 403, cors);
+      }
+      if (user.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
+        return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+      }
+
+      const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+      if (abuseDecision.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: abuseDecision.reason });
+        return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      const exp = now + LICENSE_TTL_SECONDS;
+      const payload = {
+        sub: discord_id,
+        did: device_id,
+        iat: now,
+        exp,
+        ver: 1,
+      };
+
+      const rotatedToken = await issueSessionToken(payload, secret);
+      await env.DB.prepare("UPDATE users SET last_validated = ? WHERE discord_id = ?")
+        .bind(new Date().toISOString(), discord_id).run();
+
+      await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "allow", reason: "refresh_success" });
+
+      return json({
+        ok: true,
+        session_token: rotatedToken,
+        expires_at: new Date(exp * 1000).toISOString(),
+        refresh_after: new Date((now + LICENSE_REFRESH_AFTER_SECONDS) * 1000).toISOString(),
+      }, 200, cors);
     }
 
     // ── Status: community pool stats ──────────────────────────────────────────
@@ -180,9 +357,149 @@ async function verifyGuildMemberSelf(userToken, guildId) {
   }
 }
 
+async function ensureAbuseSchema(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS abuse_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      discord_id TEXT,
+      action TEXT,
+      outcome TEXT,
+      reason TEXT,
+      device_hash TEXT,
+      ip_hash TEXT,
+      country TEXT,
+      user_agent_hash TEXT,
+      created_at TEXT,
+      created_ts INTEGER
+    )
+  `).run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_abuse_events_discord_ts ON abuse_events(discord_id, created_ts DESC)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_abuse_events_outcome_ts ON abuse_events(outcome, created_ts DESC)").run();
+}
+
+async function sha256Hex(input) {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashSignal(env, value) {
+  if (!value) return null;
+  const salt = env.ABUSE_LOG_SALT || env.LICENSE_SIGNING_KEY || env.ADMIN_KEY || "knull-abuse";
+  return sha256Hex(`${salt}:${value}`);
+}
+
+function getIp(request) {
+  const direct = request.headers.get("CF-Connecting-IP");
+  if (direct) return direct;
+  const forwarded = request.headers.get("X-Forwarded-For");
+  if (!forwarded) return null;
+  return forwarded.split(",")[0]?.trim() || null;
+}
+
+async function logAbuseEvent(env, request, { discordId, action, deviceId, outcome, reason }) {
+  const createdAt = new Date().toISOString();
+  const createdTs = Math.floor(Date.now() / 1000);
+  const country = request.headers.get("CF-IPCountry") || "UNK";
+  const ipHash = await hashSignal(env, getIp(request));
+  const uaHash = await hashSignal(env, request.headers.get("User-Agent"));
+  const deviceHash = await hashSignal(env, deviceId || null);
+
+  await env.DB.prepare(
+    `INSERT INTO abuse_events (discord_id, action, outcome, reason, device_hash, ip_hash, country, user_agent_hash, created_at, created_ts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(discordId || null, action || null, outcome || null, reason || null, deviceHash, ipHash, country, uaHash, createdAt, createdTs).run();
+}
+
+async function evaluateAbuseAndMaybeBlock(env, discordId) {
+  if (!discordId) return { blocked: false };
+
+  const now = Math.floor(Date.now() / 1000);
+  const dayAgo = now - 24 * 60 * 60;
+  const hourAgo = now - 60 * 60;
+  const tenMinAgo = now - 10 * 60;
+
+  const devices = await env.DB.prepare(
+    "SELECT COUNT(DISTINCT device_hash) AS c FROM abuse_events WHERE discord_id = ? AND created_ts >= ? AND device_hash IS NOT NULL"
+  ).bind(discordId, dayAgo).first();
+
+  const countries = await env.DB.prepare(
+    "SELECT COUNT(DISTINCT country) AS c FROM abuse_events WHERE discord_id = ? AND created_ts >= ? AND country IS NOT NULL AND country != ''"
+  ).bind(discordId, dayAgo).first();
+
+  const denyBurst = await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM abuse_events WHERE discord_id = ? AND created_ts >= ? AND outcome LIKE 'deny.%'"
+  ).bind(discordId, tenMinAgo).first();
+
+  const badRefresh = await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM abuse_events WHERE discord_id = ? AND created_ts >= ? AND action = 'refresh' AND outcome IN ('deny.invalid_token','deny.subject_mismatch')"
+  ).bind(discordId, hourAgo).first();
+
+  const deviceCount = Number(devices?.c || 0);
+  const countryCount = Number(countries?.c || 0);
+  const denyCount = Number(denyBurst?.c || 0);
+  const badRefreshCount = Number(badRefresh?.c || 0);
+
+  let reason = null;
+  if (deviceCount > ABUSE_MAX_DISTINCT_DEVICES_24H) reason = "abuse.too_many_devices";
+  else if (countryCount > ABUSE_MAX_DISTINCT_COUNTRIES_24H) reason = "abuse.too_many_countries";
+  else if (denyCount > ABUSE_MAX_DENY_EVENTS_10M) reason = "abuse.deny_burst";
+  else if (badRefreshCount > ABUSE_MAX_BAD_REFRESH_1H) reason = "abuse.invalid_refresh_burst";
+
+  if (!reason) return { blocked: false };
+
+  await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discordId).run();
+  return { blocked: true, reason };
+}
+
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json", ...headers },
   });
+}
+
+function toBase64Url(input) {
+  const raw = typeof input === "string" ? input : String.fromCharCode(...new Uint8Array(input));
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function fromBase64Url(value) {
+  const pad = value.length % 4 === 0 ? "" : "=".repeat(4 - (value.length % 4));
+  const b64 = value.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  return atob(b64);
+}
+
+async function hmacSign(secret, message) {
+  const keyData = new TextEncoder().encode(secret);
+  const msgData = new TextEncoder().encode(message);
+  const key = await crypto.subtle.importKey("raw", keyData, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return await crypto.subtle.sign("HMAC", key, msgData);
+}
+
+async function issueSessionToken(payload, secret) {
+  const payloadJson = JSON.stringify(payload);
+  const payloadB64 = toBase64Url(payloadJson);
+  const sig = await hmacSign(secret, payloadB64);
+  const sigB64 = toBase64Url(sig);
+  return `${payloadB64}.${sigB64}`;
+}
+
+async function verifySessionToken(token, secret) {
+  try {
+    const parts = String(token).split(".");
+    if (parts.length !== 2) return { ok: false };
+    const [payloadB64, sigB64] = parts;
+    const expectedSig = await hmacSign(secret, payloadB64);
+    if (toBase64Url(expectedSig) !== sigB64) return { ok: false };
+
+    const payloadJson = fromBase64Url(payloadB64);
+    const payload = JSON.parse(payloadJson);
+    const now = Math.floor(Date.now() / 1000);
+    if (!payload?.exp || now >= payload.exp) return { ok: false };
+
+    return { ok: true, payload };
+  } catch {
+    return { ok: false };
+  }
 }
