@@ -33,6 +33,8 @@ const { URL } = require("url");
 const _httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, keepAliveMsecs: 10000 });
 const _httpAgent  = new http.Agent({  keepAlive: true, maxSockets: 32, keepAliveMsecs: 10000 });
 
+const CHROME_FULL_VERSION = process.versions.chrome || "131.0.0.0";
+
 // ── SQLite local database ─────────────────────────────────────────────────────
 let Database;
 try { Database = require("better-sqlite3"); } catch (_) { Database = null; }
@@ -234,6 +236,49 @@ const manualOpenSessions = new Set();
 
 // Track queue timer intervals: sessionId → intervalId
 const timerIntervals = new Map();
+const timerMeta = new Map(); // sessionId -> { ms, mode: "up" | "down" }
+
+function clearQueueTimer(sessionId) {
+  if (timerIntervals.has(sessionId)) {
+    clearInterval(timerIntervals.get(sessionId));
+    timerIntervals.delete(sessionId);
+  }
+  timerMeta.delete(sessionId);
+}
+
+function getSessionIdByWebContents(webContents) {
+  for (const [sessionId, win] of browserWindows.entries()) {
+    if (win && !win.isDestroyed() && win.webContents === webContents) return sessionId;
+  }
+  return null;
+}
+
+function startQueueTimerInternal(sessionId, currentMs = 0, mode = "up") {
+  clearQueueTimer(sessionId);
+
+  let ms = Math.max(0, Number(currentMs) || 0);
+  timerMeta.set(sessionId, { ms, mode });
+  if (mainWindow) mainWindow.webContents.send("queue-timer-tick", { sessionId, ms });
+
+  const interval = setInterval(() => {
+    const meta = timerMeta.get(sessionId);
+    if (!meta) {
+      clearQueueTimer(sessionId);
+      return;
+    }
+
+    if (meta.mode === "down") meta.ms = Math.max(0, meta.ms - 1000);
+    else meta.ms += 1000;
+
+    if (mainWindow) mainWindow.webContents.send("queue-timer-tick", { sessionId, ms: meta.ms });
+
+    if (meta.mode === "down" && meta.ms <= 0) {
+      clearQueueTimer(sessionId);
+    }
+  }, 1000);
+
+  timerIntervals.set(sessionId, interval);
+}
 
 // Sessions being intentionally killed — suppress crash event for these
 const intentionalKills = new Set();
@@ -288,22 +333,18 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   // Override UA to remove Electron signature.
   // onBeforeSendHeaders replaces any previously set listener on this session — no stacking.
   const ua = userAgent || profile?.user_agent ||
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_FULL_VERSION} Safari/537.36`;
   ses.webRequest.onBeforeSendHeaders(null); // clear stale handler before re-registering
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     const h = details.requestHeaders;
     h["User-Agent"] = ua;
     // Strip all Electron/Node fingerprint headers
     delete h["X-Electron-Version"];
-    delete h["Sec-CH-UA-Full-Version-List"];
-    delete h["sec-ch-ua-full-version-list"];
+
+    const hasHeader = (name) => Object.keys(h).some((k) => k.toLowerCase() === name.toLowerCase());
     // Ensure standard browser headers are present
-    if (!h["Accept-Language"]) h["Accept-Language"] = profile?.language ? `${profile.language},en;q=0.9` : "en-US,en;q=0.9";
-    if (!h["Accept-Encoding"]) h["Accept-Encoding"] = "gzip, deflate, br";
-    // Fix sec-ch-ua to match the UA string (Chrome 131)
-    h["sec-ch-ua"] = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"';
-    h["sec-ch-ua-mobile"] = "?0";
-    h["sec-ch-ua-platform"] = '"Windows"';
+    if (!hasHeader("Accept-Language")) h["Accept-Language"] = profile?.language ? `${profile.language},en;q=0.9` : "en-US,en;q=0.9";
+    if (!hasHeader("Accept-Encoding")) h["Accept-Encoding"] = "gzip, deflate, br";
     callback({ requestHeaders: h });
   });
   await ses.setUserAgent(ua);
@@ -343,10 +384,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     browserWindows.delete(sessionId);
     sessionProxies.delete(sessionId);
     sessionCredentials.delete(sessionId);
-    if (timerIntervals.has(sessionId)) {
-      clearInterval(timerIntervals.get(sessionId));
-      timerIntervals.delete(sessionId);
-    }
+    clearQueueTimer(sessionId);
     // Only fire session-crashed if it was NOT an intentional kill and NOT a manual open
     if (!intentionalKills.has(sessionId) && !manualOpenSessions.has(sessionId) && mainWindow) {
       mainWindow.webContents.send("session-crashed", { sessionId, code: 0 });
@@ -998,32 +1036,45 @@ ipcMain.handle("kill-browser", (_event, sessionId) => {
   }
   sessionProxies.delete(sessionId);
   sessionCredentials.delete(sessionId);
-  if (timerIntervals.has(sessionId)) {
-    clearInterval(timerIntervals.get(sessionId));
-    timerIntervals.delete(sessionId);
-  }
+  clearQueueTimer(sessionId);
   updateTray();
   return { ok: true };
 });
 
 // ── IPC: queue timer tick (renderer asks main to start/stop per-session timer) ─
 ipcMain.handle("start-queue-timer", (_event, { sessionId, currentMs }) => {
-  if (timerIntervals.has(sessionId)) return { ok: true }; // already running
-  let ms = currentMs || 0;
-  const interval = setInterval(() => {
-    ms += 1000;
-    if (mainWindow) mainWindow.webContents.send("queue-timer-tick", { sessionId, ms });
-  }, 1000);
-  timerIntervals.set(sessionId, interval);
+  startQueueTimerInternal(sessionId, currentMs || 0, "up");
   return { ok: true };
 });
 
 ipcMain.handle("stop-queue-timer", (_event, sessionId) => {
-  if (timerIntervals.has(sessionId)) {
-    clearInterval(timerIntervals.get(sessionId));
-    timerIntervals.delete(sessionId);
-  }
+  clearQueueTimer(sessionId);
   return { ok: true };
+});
+
+// Session windows report parsed queue wait times from queue pages.
+// Use this to drive a live countdown in the Queue Leaderboard.
+ipcMain.on("queue-wait-detected", (_event, payload) => {
+  const sessionId = getSessionIdByWebContents(_event.sender);
+  if (!sessionId) return;
+
+  const remainingMs = Number(payload?.remainingMs);
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return;
+
+  // Persist latest observed wait to session record for visibility after reload.
+  const db = getDb();
+  if (db) {
+    const row = db.prepare('SELECT * FROM "BrowserSession" WHERE id = ?').get(sessionId);
+    if (row) {
+      const rec = rowToRecord(row);
+      const merged = { ...rec, queue_timer_ms: Math.floor(remainingMs) };
+      const now = new Date().toISOString();
+      db.prepare('UPDATE "BrowserSession" SET data = ?, updated_date = ? WHERE id = ?')
+        .run(JSON.stringify((({ id, created_date, updated_date, ...rest }) => rest)(merged)), now, sessionId);
+    }
+  }
+
+  startQueueTimerInternal(sessionId, Math.floor(remainingMs), "down");
 });
 
 // ── IMAP background polling ─────────────────────────────────────────────────
@@ -1224,10 +1275,7 @@ function _doUpdateTray() {
         for (const [sessionId, win] of browserWindows.entries()) {
           intentionalKills.add(sessionId);
           try { win.destroy(); } catch (_) {}
-          if (timerIntervals.has(sessionId)) {
-            clearInterval(timerIntervals.get(sessionId));
-            timerIntervals.delete(sessionId);
-          }
+          clearQueueTimer(sessionId);
         }
         browserWindows.clear();
         sessionProxies.clear();
