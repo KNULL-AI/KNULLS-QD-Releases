@@ -2,7 +2,7 @@
   "name": "knull-queue-destroyer",
   "private": true,
   "version": "1.0.0",
-  "main": "electron/main.js",
+  "main": "electron/main.entry.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -11,7 +11,8 @@
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
     "electron": "cross-env NODE_ENV=development electron .",
-    "electron:build": "vite build && electron-builder --win",
+    "build:bytecode": "node scripts/compile-bytecode.cjs",
+    "electron:build": "vite build && npm run build:bytecode && electron-builder --win",
     "electron:dev": "concurrently \"npm run dev\" \"cross-env NODE_ENV=development electron .\"",
     "rebuild": "npx @electron/rebuild -f -w better-sqlite3"
   },
@@ -24,6 +25,7 @@
     ],
     "files": [
       "electron/**/*",
+      "!electron/main.js",
       "dist/**/*",
       "node_modules/**/*",
       "!KNULL/**/*"
@@ -77,6 +79,7 @@
     "@radix-ui/react-tooltip": "^1.1.8",
     "@tanstack/react-query": "^5.84.1",
     "better-sqlite3": "^11.10.0",
+    "bytenode": "^1.5.7",
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
