@@ -8,6 +8,7 @@ import { cfRequest, getDeviceId } from "@/lib/electronBridge";
 const CF_ENDPOINT = "https://knull-activation.sloanbrack.workers.dev/activate";
 const LICENSE_REFRESH_MS = 10 * 60 * 1000;
 const OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -187,7 +188,7 @@ export default function AppLayout() {
           <span className="font-mono font-bold text-xs tracking-widest text-gray-200">
             KNULL<span className="text-emerald-400">'s</span> Queue Destroyer
           </span>
-          <span className="text-[9px] font-mono text-gray-600 tracking-widest hidden sm:block">v1.0.0</span>
+          <span className="text-[9px] font-mono text-gray-600 tracking-widest hidden sm:block">v{APP_VERSION}</span>
         </div>
 
         {/* Window controls */}
