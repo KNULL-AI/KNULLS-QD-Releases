@@ -32,6 +32,7 @@ function listDistFiles() {
 }
 
 const staticTargets = [
+  "electron/main.js",
   "electron/main.jsc",
   "electron/preload.js",
   "electron/session-preload.js",

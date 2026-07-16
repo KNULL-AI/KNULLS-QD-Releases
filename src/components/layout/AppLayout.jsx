@@ -84,6 +84,11 @@ export default function AppLayout() {
       return;
     }
 
+    if (data?.error) {
+      // Transient refresh/handshake errors should not hard-revoke local access.
+      return;
+    }
+
     if (data?.ok && data?.session_token) {
       await db.DiscordVerify.update(record.id, {
         last_checked: new Date().toISOString(),
@@ -109,10 +114,14 @@ export default function AppLayout() {
         client_nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       });
 
-      if (data?.blocked || data?.error) {
+      if (data?.blocked) {
         // Mark locally as unverified so they see the gate
         await db.DiscordVerify.update(record.id, { verified: false, license_session_token: null });
         setAuthState("blocked");
+      } else if (data?.error) {
+        // Non-blocking errors (e.g., transient backend propagation) should
+        // return to activation flow without showing the revoked banner.
+        setAuthState("needs_activation");
       } else {
         // Update last_checked + license token material (if available)
         await db.DiscordVerify.update(record.id, {

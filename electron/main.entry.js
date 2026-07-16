@@ -37,8 +37,22 @@ if (!app.isPackaged) {
   require(sourceMainPath);
 } else if (fs.existsSync(bytecodeMainPath)) {
   verifyPackagedIntegrity();
-  require("bytenode");
-  require(bytecodeMainPath);
+  try {
+    require("bytenode");
+    require(bytecodeMainPath);
+  } catch (err) {
+    if (fs.existsSync(sourceMainPath)) {
+      // Fallback path for V8/bytecode compatibility drift.
+      console.warn("[knull] Failed to load main.jsc; falling back to main.js:", err?.message || err);
+      require(sourceMainPath);
+    } else {
+      throw err;
+    }
+  }
 } else {
-  throw new Error("Missing compiled main.jsc in packaged app build.");
+  if (fs.existsSync(sourceMainPath)) {
+    require(sourceMainPath);
+  } else {
+    throw new Error("Missing compiled main.jsc and fallback main.js in packaged app build.");
+  }
 }

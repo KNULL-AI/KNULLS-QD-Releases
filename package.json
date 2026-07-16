@@ -31,7 +31,6 @@
     ],
     "files": [
       "electron/**/*",
-      "!electron/main.js",
       "dist/**/*",
       "node_modules/**/*",
       "!KNULL/**/*"
