@@ -12,8 +12,8 @@ function invoke(channel, ...args) {
 }
 
 /** Launch a browser instance for a session */
-export function launchBrowser({ sessionId, url, proxy, userAgent, browser = "chrome", profile = null, noPreload = false, manualOpen = false, credentials = null }) {
-  return invoke("launchBrowser", { sessionId, url, proxy, userAgent, browser, profile, noPreload, manualOpen, credentials });
+export function launchBrowser({ sessionId, url, proxy, userAgent, browser = "chrome", profile = null, noPreload = false, manualOpen = false, credentials = null, partitionKey = null }) {
+  return invoke("launchBrowser", { sessionId, url, proxy, userAgent, browser, profile, noPreload, manualOpen, credentials, partitionKey });
 }
 
 /** Kill a running browser session */
@@ -127,6 +127,20 @@ export function onSessionCrashed(cb) {
 export function offSessionCrashed(wrapper) {
   if (typeof window !== "undefined" && window.electronAPI?.offSessionCrashed) {
     window.electronAPI.offSessionCrashed(wrapper);
+  }
+}
+
+/** Subscribe to session launch events from the main process. Returns wrapper for off*. */
+export function onSessionLaunched(cb) {
+  if (typeof window !== "undefined" && window.electronAPI?.onSessionLaunched) {
+    return window.electronAPI.onSessionLaunched(cb);
+  }
+  return cb;
+}
+
+export function offSessionLaunched(wrapper) {
+  if (typeof window !== "undefined" && window.electronAPI?.offSessionLaunched) {
+    window.electronAPI.offSessionLaunched(wrapper);
   }
 }
 

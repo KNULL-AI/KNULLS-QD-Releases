@@ -208,6 +208,7 @@ const browserWindows = new Map();
 // Cache the proxy assigned to each session so the app-level "login" handler
 // can resolve 407 proxy auth challenges in O(1) instead of querying the DB.
 const sessionProxies = new Map(); // sessionId → { host, username, password }
+const sessionCredentials = new Map(); // sessionId → { email, password }
 
 // Sessions launched as manual-open — closing won't fire session-crashed
 const manualOpenSessions = new Set();
@@ -222,17 +223,22 @@ const intentionalKills = new Set();
 let mainWindow = null;
 let tray = null;
 let _quitting = false;
+const DEBUG_SESSION_DEVTOOLS = process.env.KNULL_DEBUG_SESSION_DEVTOOLS === "1";
 
 // ── IPC: launch a task BrowserWindow ─────────────────────────────────────────
-ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAgent, browser, profile, noPreload = false, manualOpen = false, credentials = null }) => {
+ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAgent, browser, profile, noPreload = false, manualOpen = false, credentials = null, partitionKey = null }) => {
   // Close existing window for this session if any
   if (browserWindows.has(sessionId)) {
     try { browserWindows.get(sessionId).destroy(); } catch (_) {}
     browserWindows.delete(sessionId);
   }
 
-  // Each session gets its own isolated cookie/storage partition (persisted across restarts)
-  const partition = `persist:knull-${sessionId}`;
+  // Each session gets its own cookie/storage partition by default.
+  // For account-driven Walmart flows, partitionKey can pin multiple sessions to
+  // one persistent account partition so warmup sign-in carries to new launches.
+  const rawPartitionKey = partitionKey || sessionId;
+  const safePartitionKey = String(rawPartitionKey).replace(/[^a-zA-Z0-9_.-]/g, "_");
+  const partition = `persist:knull-${safePartitionKey}`;
   const ses = session.fromPartition(partition);
 
   // Set proxy on the session object — supports auth credentials properly
@@ -281,6 +287,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     h["sec-ch-ua-platform"] = '"Windows"';
     callback({ requestHeaders: h });
   });
+  await ses.setUserAgent(ua);
 
   const width = profile?.viewport_width || 1280;
   const height = profile?.viewport_height || 800;
@@ -303,9 +310,8 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   // Block new-window popups that could steal focus/session
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
-  // ── TEMP DEBUG: open DevTools for credentialed manual-open sessions so we can
-  // inspect the real login form DOM. Remove this block once things are stable.
-  if (manualOpen && credentials) {
+  // Optional debug: open DevTools for credentialed manual-open sessions.
+  if (DEBUG_SESSION_DEVTOOLS && manualOpen && credentials) {
     win.webContents.once("did-finish-load", () => {
       if (!win.isDestroyed()) win.webContents.openDevTools({ mode: "detach" });
     });
@@ -317,6 +323,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   win.on("closed", () => {
     browserWindows.delete(sessionId);
     sessionProxies.delete(sessionId);
+    sessionCredentials.delete(sessionId);
     if (timerIntervals.has(sessionId)) {
       clearInterval(timerIntervals.get(sessionId));
       timerIntervals.delete(sessionId);
@@ -489,8 +496,22 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
 
   browserWindows.set(sessionId, win);
   if (proxy) sessionProxies.set(sessionId, { host: proxy.host, username: proxy.username, password: proxy.password || "" });
+  if (credentials?.email && credentials?.password) sessionCredentials.set(sessionId, { email: credentials.email, password: credentials.password });
+  else sessionCredentials.delete(sessionId);
 
-  console.log(`[knull] Launched BrowserWindow session ${sessionId} → ${url} via ${proxy ? `${proxy.protocol || "HTTP"} ${proxy.host}:${proxy.port} auth=${!!proxy.username}` : "no proxy"}`);
+  const accountEmail = credentials?.email || null;
+  console.log(`[knull] Launched BrowserWindow session ${sessionId} manualOpen=${manualOpen} account=${accountEmail || "none"} → ${url} via ${proxy ? `${proxy.protocol || "HTTP"} ${proxy.host}:${proxy.port} auth=${!!proxy.username}` : "no proxy"}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("session-launched", {
+      sessionId,
+      url,
+      manualOpen,
+      accountEmail,
+      partition,
+      proxyLabel: proxy ? `${proxy.host}:${proxy.port}` : "No proxy",
+      launchedAt: new Date().toISOString(),
+    });
+  }
   updateTray();
   return { ok: true };
 });
@@ -944,7 +965,8 @@ ipcMain.handle("imap-fetch", async (_event, config) => {
 ipcMain.handle("inject-verification-code", (_event, { sessionId, code }) => {
   const win = browserWindows.get(sessionId);
   if (!win || win.isDestroyed()) return { ok: false, error: "No open session for that account" };
-  win.webContents.send("inject-verification-code", code);
+  const creds = sessionCredentials.get(sessionId) || null;
+  win.webContents.send("inject-verification-code", { code, password: creds?.password || null });
   return { ok: true };
 });
 
@@ -956,6 +978,7 @@ ipcMain.handle("kill-browser", (_event, sessionId) => {
     try { win.destroy(); } catch (_) {}
   }
   sessionProxies.delete(sessionId);
+  sessionCredentials.delete(sessionId);
   if (timerIntervals.has(sessionId)) {
     clearInterval(timerIntervals.get(sessionId));
     timerIntervals.delete(sessionId);
@@ -1048,7 +1071,15 @@ async function imapPollOnce() {
     imapProcessedUids.add(msg.uid);
     if (!msg.code) continue;
 
-    const account = accounts.find((a) => a.email && a.email.toLowerCase() === (msg.to || "").toLowerCase());
+    const msgTo = (msg.to || "").toLowerCase();
+    const msgSubject = (msg.subject || "").toLowerCase();
+    const msgSnippet = (msg.snippet || "").toLowerCase();
+    const account = accounts.find((a) => {
+      const email = (a.email || "").toLowerCase();
+      if (!email) return false;
+      if (email === msgTo) return true;
+      return msgSubject.includes(email) || msgSnippet.includes(email);
+    });
     let delivery_status = "displayed", session_id = null;
 
     if (!account) {
@@ -1060,9 +1091,11 @@ async function imapPollOnce() {
       if (sessions.length) {
         const win = browserWindows.get(sessions[0].id);
         if (win && !win.isDestroyed()) {
-          win.webContents.send("inject-verification-code", msg.code);
+          const creds = sessionCredentials.get(sessions[0].id) || null;
+          win.webContents.send("inject-verification-code", { code: msg.code, password: creds?.password || null });
           delivery_status = "auto_filled";
           session_id = sessions[0].id;
+          _imapDbUpdate("WalmartAccount", account.id, { status: "signed_in", last_used: new Date().toISOString() });
         } else {
           delivery_status = "no_session";
         }
@@ -1179,6 +1212,7 @@ function _doUpdateTray() {
         }
         browserWindows.clear();
         sessionProxies.clear();
+        sessionCredentials.clear();
         updateTray();
         if (mainWindow) mainWindow.webContents.send("all-sessions-killed");
       },
@@ -1229,6 +1263,7 @@ function confirmAndExit(win) {
     }
     browserWindows.clear();
     sessionProxies.clear();
+    sessionCredentials.clear();
     app.exit(0);
   }
 }
@@ -1333,6 +1368,7 @@ app.on("before-quit", () => {
   }
   browserWindows.clear();
   sessionProxies.clear();
+  sessionCredentials.clear();
   imapPollActive = false;
   clearTimeout(imapPollTimer);
 });

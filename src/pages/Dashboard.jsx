@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { Shield, MonitorPlay, AlertTriangle, Zap, ArrowRight, StopCircle } from "lucide-react";
 import { db } from "@/lib/db";
-import { killBrowser, onAllSessionsKilled, offAllSessionsKilled } from "@/lib/electronBridge";
+import { killBrowser, onAllSessionsKilled, offAllSessionsKilled, onSessionLaunched, offSessionLaunched } from "@/lib/electronBridge";
 import StatCard from "@/components/dashboard/StatCard";
 import StatusBadge from "@/components/proxy/StatusBadge";
 import QueueLeaderboard from "@/components/dashboard/QueueLeaderboard";
@@ -12,6 +12,7 @@ import toast from "react-hot-toast";
 export default function Dashboard() {
   const [proxies, setProxies] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [recentLaunches, setRecentLaunches] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const loadData = useCallback(async () => {
@@ -46,6 +47,13 @@ export default function Dashboard() {
     const wrapper = onAllSessionsKilled(loadData);
     return () => offAllSessionsKilled(wrapper);
   }, [loadData]);
+
+  useEffect(() => {
+    const wrapper = onSessionLaunched((evt) => {
+      setRecentLaunches((prev) => [evt, ...prev].slice(0, 8));
+    });
+    return () => offSessionLaunched(wrapper);
+  }, []);
 
   const stopAllSessions = async () => {
     const running = sessions.filter((s) => s.status === "running");
@@ -129,6 +137,32 @@ export default function Dashboard() {
 
       {/* Queue Leaderboard */}
       <QueueLeaderboard sessions={sessions} onUpdate={loadData} />
+
+      {/* Launch Diagnostics */}
+      <div className="rounded-lg border border-white/5 bg-white/[0.02] overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/5">
+          <h2 className="font-mono text-xs text-gray-400 uppercase tracking-wider">Recent Launches</h2>
+        </div>
+        {recentLaunches.length === 0 ? (
+          <div className="px-4 py-4 text-[11px] font-mono text-gray-600">No launch events in this app session yet.</div>
+        ) : (
+          <div className="divide-y divide-white/5">
+            {recentLaunches.map((e, i) => (
+              <div key={`${e.sessionId}-${i}`} className="px-4 py-2.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-mono text-gray-300 truncate">{e.sessionId}</div>
+                  <div className="text-[10px] font-mono text-gray-600 truncate">{e.accountEmail || "no account"} · {e.proxyLabel}</div>
+                  <div className="text-[10px] font-mono text-blue-400/80 truncate">{e.partition || "persist:knull-unknown"}</div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className={`text-[10px] font-mono ${e.manualOpen ? "text-orange-400" : "text-emerald-400"}`}>{e.manualOpen ? "manual" : "auto"}</div>
+                  <div className="text-[10px] font-mono text-gray-600">{new Date(e.launchedAt).toLocaleTimeString()}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Recent Sessions */}
       <div className="rounded-lg border border-white/5 bg-white/[0.02] overflow-hidden">

@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  Settings as SettingsIcon, Download, Upload, AlertTriangle, Check,
-  Loader2, Inbox, Mail, Play, Square, RefreshCw, Copy,
+  Settings as SettingsIcon, Download, Upload, AlertTriangle, Check, Inbox, Mail, Play, Square, RefreshCw, Copy,
   MailCheck, User, Brain, Eye, EyeOff
 } from "lucide-react";
 import { db } from "@/lib/db";
@@ -164,7 +163,7 @@ function ImapSection() {
     const res = await imapFetch({ host: config.host, port: config.port, username: config.username, password: config.password, tls: config.tls, limit: 5 });
     setTesting(false);
     if (res.error) { toast.error(`Connection failed: ${res.error}`, { duration: 5000 }); return; }
-    toast.success(`Connected — ${res.messages.length} unseen message${res.messages.length !== 1 ? "s" : ""}`);
+    toast.success(`Connected — scanned ${res.messages.length} recent message${res.messages.length !== 1 ? "s" : ""}`);
     if (res.messages.length) await processMessages(res.messages);
   };
 

@@ -102,7 +102,9 @@ function matchesKeyword(content, keyword) {
   if (regexMatch) {
     try {
       return new RegExp(regexMatch[1], regexMatch[2]).test(content);
-    } catch (_) {}
+    } catch {
+      // ignore invalid regex
+    }
   }
   return content?.toLowerCase().includes(keyword.toLowerCase());
 }
@@ -111,6 +113,33 @@ function pickProxy(proxies, mode, index) {
   if (!proxies.length) return null;
   if (mode === "random") return proxies[Math.floor(Math.random() * proxies.length)];
   return proxies[index % proxies.length]; // round_robin or sticky
+}
+
+const normalizeId = (id) => id == null ? "" : String(id);
+const resolveAssignedAccounts = (tg, allAccounts) => {
+  const rawIds = Array.isArray(tg.account_ids)
+    ? tg.account_ids
+    : typeof tg.account_ids === "string"
+      ? (() => { try { return JSON.parse(tg.account_ids); } catch { return []; } })()
+      : [];
+  const desiredIds = Array.isArray(rawIds) ? rawIds.map(normalizeId) : [];
+  return (Array.isArray(allAccounts) ? allAccounts : []).filter((a) => desiredIds.includes(normalizeId(a.id)));
+};
+
+async function resolveProxyForAccount(acc, groupProxies) {
+  if (acc.proxy_assignment_type === "single" && acc.proxy_id) {
+    const p = await db.Proxy.get(acc.proxy_id).catch(() => null);
+    if (p) return p;
+  }
+  if (acc.proxy_assignment_type === "group" && acc.proxy_group_id) {
+    const pg = await db.ProxyGroup.get(acc.proxy_group_id).catch(() => null);
+    if (pg?.proxy_ids?.length) {
+      const all = await Promise.all(pg.proxy_ids.map((id) => db.Proxy.get(id).catch(() => null)));
+      const found = all.find(Boolean);
+      if (found) return found;
+    }
+  }
+  return groupProxies.length ? groupProxies[0] : null;
 }
 
 async function runTaskGroup(tg) {
@@ -124,9 +153,56 @@ async function runTaskGroup(tg) {
   }
   // No proxy group set = direct connection (no proxy)
 
+  const isWalmart = (tg.retailer || "").toLowerCase() === "walmart";
+  let assignedAccounts = [];
+  if (isWalmart && tg.account_ids?.length) {
+    const allAccounts = await db.WalmartAccount.list().catch(() => []);
+    assignedAccounts = resolveAssignedAccounts(tg, allAccounts);
+    if (tg.account_ids.length && !assignedAccounts.length) {
+      console.warn(`[DiscordMonitor] Walmart task group ${tg.name} has account_ids set, but no matching accounts were found`);
+    }
+  }
+
+  const now = new Date().toISOString();
+
+  if (assignedAccounts.length) {
+    // Account-driven trigger: one session per assigned account. For Walmart,
+    // Discord-triggered runs should reuse the warmed account cookies and go
+    // directly to the target URL (do not force re-login every trigger).
+    const launchUrl = tg.target_url;
+    const sessions = [];
+    for (const acc of assignedAccounts) {
+      const proxy = await resolveProxyForAccount(acc, proxies);
+      const sess = await db.BrowserSession.create({
+        name: `[AUTO] ${tg.name} — ${acc.label}`,
+        target_url: tg.target_url,
+        proxy_id: proxy?.id || null,
+        proxy_label: proxy ? `${proxy.host}:${proxy.port}` : "No proxy",
+        status: "running",
+        rotation_mode: tg.rotation_mode || "round_robin",
+        user_agent: tg.user_agent || null,
+        browser: tg.browser || "chrome",
+        started_at: now,
+        walmart_account_id: acc.id,
+        walmart_account_email: acc.email,
+      });
+      await launchBrowser({
+        sessionId: sess.id, url: launchUrl, proxy,
+        userAgent: tg.user_agent || null,
+        browser: tg.browser || "chrome",
+        manualOpen: true,
+        credentials: null,
+        partitionKey: `walmart-account-${acc.id}`,
+      });
+      sessions.push(sess);
+      await db.WalmartAccount.update(acc.id, { last_used: now }).catch(() => {});
+      if (tg.delay_ms > 0 && sessions.length < assignedAccounts.length) await new Promise((r) => setTimeout(r, tg.delay_ms));
+    }
+    return sessions.length;
+  }
+
   const count = tg.instance_count || 1;
   const mode = tg.rotation_mode || "round_robin";
-  const now = new Date().toISOString();
 
   const assignedProxies = Array.from({ length: count }, (_, i) => pickProxy(proxies, mode, i));
 
@@ -149,6 +225,7 @@ async function runTaskGroup(tg) {
     launchBrowser({ sessionId: sessions[i].id, url: tg.target_url, proxy: assignedProxies[i], userAgent: tg.user_agent || null, browser: tg.browser || "chrome" });
     if (tg.delay_ms > 0 && i < sessions.length - 1) await new Promise((r) => setTimeout(r, tg.delay_ms));
   }
+  return count;
 }
 
 // ── Walmart Item Panel ────────────────────────────────────────────────────────
@@ -647,42 +724,37 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
           pushLog({ type: "info", monitor: monitorNameRef.current, channel: triggerChannelLabel, msg: `[DEBUG] snapshots=${snapshots.length} embeds=${(resolvedMsg?.embeds||[]).length} content="${(resolvedMsg?.content||"").slice(0,80)}"` });
 
           const allUrls = extractUrls(resolvedMsg);
-          const walmartUrl = allUrls.find((u) => u.includes("walmart.com"));
-          const embed = (resolvedMsg?.embeds || [])[0] || {};
-          const primaryUrl = embed.url || walmartUrl || allUrls[0] || null;
+          const urlMap = new Map();
+          for (const url of allUrls) {
+            const norm = normalizeUrl(url);
+            if (!norm) continue;
+            if (!urlMap.has(norm)) urlMap.set(norm, url);
+          }
+          const allUniqueUrls = [...urlMap.entries()].map(([norm, url]) => ({ norm, url }));
+          const walmartUrls = allUniqueUrls.filter((item) => item.norm.includes("walmart.com"));
+          const activeUrls = walmartUrls.length ? walmartUrls : allUniqueUrls;
+          const freshUrls = activeUrls.filter((item) => !firedMessageIdsRef.current.has(`url:${item.norm}`));
 
-          if (!primaryUrl) {
+          if (!activeUrls.length) {
             newErrors._walmart = `No URL found in Discord message`;
+          } else if (!freshUrls.length) {
+            pushLog({ type: "cooldown", monitor: monitorNameRef.current, channel: triggerChannelLabel, msg: "Duplicate Walmart URL suppressed — already launched earlier" });
+          } else if (!pool.length) {
+            newErrors._walmart = `No task groups assigned to this monitor`;
           } else {
-            const normPrimary = normalizeUrl(primaryUrl);
-
-            // Deduplicate: skip if this exact URL has already been launched this session
-            if (firedMessageIdsRef.current.has(`url:${normPrimary}`)) {
-              pushLog({ type: "cooldown", monitor: monitorNameRef.current, channel: triggerChannelLabel, msg: `Duplicate URL suppressed — already launched: ${normPrimary}` });
-            } else {
-              firedMessageIdsRef.current.add(`url:${normPrimary}`);
-
-              // Try to match against a task group by URL first
-              const matched = pool.filter((tg) => normalizeUrl(tg.target_url) === normPrimary);
-              const notYetLaunched = matched.filter((tg) => !launchedIdsRef.current.has(tg.id));
-
-              if (matched.length > 0) {
-                // Matched a specific task group by URL
-                for (const tg of notYetLaunched) {
-                  await runTaskGroup(tg);
-                  totalInstances += tg.instance_count || 1;
-                  syncLaunchedIds(new Set([...launchedIdsRef.current, tg.id]));
-                }
-              } else if (pool.length > 0) {
-                // No URL match — apply the drop URL to all assigned task groups and launch
-                for (const tg of pool) {
-                  await db.TaskGroup.update(tg.id, { target_url: primaryUrl });
-                  await runTaskGroup({ ...tg, target_url: primaryUrl });
-                  totalInstances += tg.instance_count || 1;
-                }
-              } else {
-                newErrors._walmart = `No task groups assigned to this monitor`;
-              }
+            // One task group per unique URL. If there are more groups than URLs,
+            // extra groups stay idle for this trigger.
+            const launchCount = Math.min(pool.length, freshUrls.length);
+            for (let i = 0; i < launchCount; i++) {
+              const tg = pool[i];
+              const assigned = freshUrls[i];
+              const assignedUrl = assigned.url;
+              const urlKey = `url:${assigned.norm}`;
+              firedMessageIdsRef.current.add(urlKey);
+              await db.TaskGroup.update(tg.id, { target_url: assignedUrl });
+              const launchedCount = await runTaskGroup({ ...tg, target_url: assignedUrl });
+              totalInstances += launchedCount || (tg.instance_count || 1);
+              syncLaunchedIds(new Set([...launchedIdsRef.current, tg.id]));
             }
           }
         } else if (fresh.retailer_type === "costco") {

@@ -152,12 +152,17 @@ function extractCode(subject, text) {
   const patterns = [
     /verification code[^\d]{0,15}(\d{4,8})/i,
     /\bcode\b[^\d]{0,15}(\d{4,8})/i,
+    /\b(\d{3})[-\s](\d{3})\b/,
+    /\b(\d{4})[-\s](\d{4})\b/,
     /\b(\d{6})\b/,
     /\b(\d{4,8})\b/,
   ];
   for (const p of patterns) {
     const m = src.match(p);
-    if (m) return m[1];
+    if (m) {
+      if (m[2]) return `${m[1]}${m[2]}`;
+      return m[1];
+    }
   }
   return null;
 }
@@ -180,7 +185,10 @@ async function imapFetch(config) {
     r = await runCmd(conn, "SELECT INBOX");
     if (!r.ok) return { error: "Select INBOX failed: " + r.final };
 
-    r = await runCmd(conn, "UID SEARCH UNSEEN");
+    // Do not rely on UNSEEN only: some providers/clients mark messages as read
+    // quickly, which would make polling miss fresh verification emails entirely.
+    // We scan recent UIDs and dedupe in main process via message UID tracking.
+    r = await runCmd(conn, "UID SEARCH ALL");
     if (!r.ok) return { error: "Search failed: " + r.final };
     const searchLine = r.lines.map((e) => e.line).find((l) => l.toUpperCase().startsWith("* SEARCH"));
     const uids = searchLine ? searchLine.replace(/^\* SEARCH/i, "").trim().split(/\s+/).filter(Boolean) : [];

@@ -52,6 +52,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onSessionCrashed: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-crashed", wrapper); return wrapper; },
   offSessionCrashed: (wrapper) => ipcRenderer.removeListener("session-crashed", wrapper),
 
+  // Session launch diagnostics — main notifies renderer when browser windows are spawned
+  onSessionLaunched: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-launched", wrapper); return wrapper; },
+  offSessionLaunched: (wrapper) => ipcRenderer.removeListener("session-launched", wrapper),
+
   // Tray: notified when tray kills all sessions
   onAllSessionsKilled: (cb) => { const wrapper = (_e) => cb(); ipcRenderer.on("all-sessions-killed", wrapper); return wrapper; },
   offAllSessionsKilled: (wrapper) => ipcRenderer.removeListener("all-sessions-killed", wrapper),
