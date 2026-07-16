@@ -35,46 +35,54 @@ try {
 
 // 2b. Basic user-agent / platform / vendor spoofing for page JS
 try {
-  const fakeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  const runtimeUA = String(navigator.userAgent || "");
+  const strippedUA = runtimeUA
+    .replace(/\sElectron\/[\d.]+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const fakeUA = strippedUA || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  const chromeMatch = fakeUA.match(/Chrome\/(\d+)\.(\d+)\.(\d+)\.(\d+)/i);
+  const chromeMajor = chromeMatch ? chromeMatch[1] : "131";
+  const chromeFull = chromeMatch ? `${chromeMatch[1]}.${chromeMatch[2]}.${chromeMatch[3]}.${chromeMatch[4]}` : "131.0.0.0";
   Object.defineProperty(navigator, "userAgent", { get: () => fakeUA, enumerable: true, configurable: true });
   Object.defineProperty(navigator, "appVersion", { get: () => fakeUA, enumerable: true, configurable: true });
   Object.defineProperty(navigator, "platform", { get: () => "Win32", enumerable: true, configurable: true });
   Object.defineProperty(navigator, "vendor", { get: () => "Google Inc.", enumerable: true, configurable: true });
   Object.defineProperty(navigator, "maxTouchPoints", { get: () => 0, enumerable: true, configurable: true });
-} catch (_) {}
 
-// 2c. navigator.userAgentData for modern Chromium UA-CH checks
-try {
-  const fakeUAData = {
-    brands: [
-      { brand: "Google Chrome", version: "131" },
-      { brand: "Chromium", version: "131" },
-      { brand: "Not A(Brand)", version: "24" },
-    ],
-    mobile: false,
-    platform: "Windows",
-    getHighEntropyValues: async (hints) => {
-      const base = {
-        architecture: "x86",
-        bitness: "64",
-        model: "",
-        platform: "Windows",
-        platformVersion: "10.0.0",
-        uaFullVersion: "131.0.0.0",
-        fullVersionList: [
-          { brand: "Google Chrome", version: "131.0.0.0" },
-          { brand: "Chromium", version: "131.0.0.0" },
-          { brand: "Not A(Brand)", version: "24.0.0.0" },
-        ],
-      };
-      if (!Array.isArray(hints)) return base;
-      return hints.reduce((acc, key) => {
-        if (Object.prototype.hasOwnProperty.call(base, key)) acc[key] = base[key];
-        return acc;
-      }, {});
-    },
-  };
-  Object.defineProperty(navigator, "userAgentData", { get: () => fakeUAData, enumerable: true, configurable: true });
+  // 2c. navigator.userAgentData for modern Chromium UA-CH checks
+  try {
+    const fakeUAData = {
+      brands: [
+        { brand: "Google Chrome", version: chromeMajor },
+        { brand: "Chromium", version: chromeMajor },
+        { brand: "Not A(Brand)", version: "24" },
+      ],
+      mobile: false,
+      platform: "Windows",
+      getHighEntropyValues: async (hints) => {
+        const base = {
+          architecture: "x86",
+          bitness: "64",
+          model: "",
+          platform: "Windows",
+          platformVersion: "10.0.0",
+          uaFullVersion: chromeFull,
+          fullVersionList: [
+            { brand: "Google Chrome", version: chromeFull },
+            { brand: "Chromium", version: chromeFull },
+            { brand: "Not A(Brand)", version: "24.0.0.0" },
+          ],
+        };
+        if (!Array.isArray(hints)) return base;
+        return hints.reduce((acc, key) => {
+          if (Object.prototype.hasOwnProperty.call(base, key)) acc[key] = base[key];
+          return acc;
+        }, {});
+      },
+    };
+    Object.defineProperty(navigator, "userAgentData", { get: () => fakeUAData, enumerable: true, configurable: true });
+  } catch (_) {}
 } catch (_) {}
 
 // 3. Spoof navigator.plugins — empty list is a dead giveaway
@@ -173,6 +181,71 @@ try {
   const _origPerfNow = performance.now.bind(performance);
   const _jitter = Math.random() * 0.3; // 0–0.3ms constant offset, unique per window
   performance.now = function () { return _origPerfNow() + _jitter; };
+} catch (_) {}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIVE QUEUE WAIT DETECTION (Pokemon Center)
+// Reports "Estimated wait time" to main process so the Queue Leaderboard can
+// show live shortest-wait ranking across active browser instances.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _lastQueueMsSent = null;
+let _lastQueueSendAt = 0;
+
+function parseQueueWaitMs(text) {
+  if (!text) return null;
+  const m = text.match(/estimated\s+wait\s+time\s*:?\s*(\d{1,2}):(\d{2}):(\d{2})/i);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  const sec = Number(m[3]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || !Number.isFinite(sec)) return null;
+  return ((h * 3600) + (min * 60) + sec) * 1000;
+}
+
+function readQueueWaitMsFromDom() {
+  const txt = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
+  if (!txt) return null;
+  if (!/virtual\s+queue|estimated\s+wait\s+time|access\s+pokemon\s+center/i.test(txt)) return null;
+  return parseQueueWaitMs(txt);
+}
+
+function reportQueueWaitIfNeeded() {
+  try {
+    const ms = readQueueWaitMsFromDom();
+    if (ms == null || ms <= 0) return;
+
+    const now = Date.now();
+    const changedEnough = _lastQueueMsSent == null || Math.abs(ms - _lastQueueMsSent) > 15000;
+    const staleReport = now - _lastQueueSendAt > 30000;
+    if (!changedEnough && !staleReport) return;
+
+    _lastQueueMsSent = ms;
+    _lastQueueSendAt = now;
+    ipcRenderer.send("queue-wait-detected", { remainingMs: ms });
+  } catch (_) {}
+}
+
+// Initial and periodic scans (queue pages can transition dynamically).
+setTimeout(reportQueueWaitIfNeeded, 800);
+setTimeout(reportQueueWaitIfNeeded, 3000);
+setInterval(reportQueueWaitIfNeeded, 5000);
+
+// Mutation-driven updates with debounce to avoid flood on heavily dynamic pages.
+let _queueScanScheduled = false;
+const queueObserver = new MutationObserver(() => {
+  if (_queueScanScheduled) return;
+  _queueScanScheduled = true;
+  setTimeout(() => {
+    _queueScanScheduled = false;
+    reportQueueWaitIfNeeded();
+  }, 700);
+});
+
+try {
+  if (document.documentElement) {
+    queueObserver.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
 } catch (_) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
