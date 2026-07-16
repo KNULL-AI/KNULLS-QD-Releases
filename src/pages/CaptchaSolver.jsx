@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  ShieldCheck, Key, Wifi, Send, Copy, CheckCheck,
+  ShieldCheck, Key, Wifi, CheckCheck,
   Loader2, ExternalLink, RefreshCw, Gauge, Users, User, AlertTriangle
 } from "lucide-react";
 import { db } from "@/lib/db";
@@ -10,11 +10,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import toast from "react-hot-toast";
 
-const CAPTCHA_TYPES = [
-  { value: "recaptchav2", label: "reCAPTCHA v2" },
-  { value: "recaptchav3", label: "reCAPTCHA v3" },
-  { value: "hcaptcha",    label: "hCaptcha" },
+const TEST_DIFFICULTIES = [
+  { value: "easy", label: "Easy", noise: 8, targetCount: [2, 3] },
+  { value: "medium", label: "Medium", noise: 16, targetCount: [2, 4] },
+  { value: "hard", label: "Hard", noise: 24, targetCount: [3, 5] },
 ];
+
+const TEST_TARGETS = ["bicycle", "bus", "traffic light", "crosswalk"];
 
 const PROVIDERS = [
   { value: "aycd",       label: "AYCD AutoSolve",  url: "https://aycd.io/account#autosolve",         hasAccessToken: true  },
@@ -46,7 +48,7 @@ async function callProxy(payload) {
       return { error: err.error || `Server error ${res.status}` };
     }
     return res.json();
-  } catch (e) {
+  } catch {
     return { error: "Endpoint unreachable — configure MASTER_KEY_ENDPOINT" };
   }
 }
@@ -272,143 +274,250 @@ function PollTierPanel({ config, onSaved }) {
 }
 
 // ── Solver Test Panel ─────────────────────────────────────────────────────────
-function SolverPanel({ config }) {
-  const [siteKey, setSiteKey] = useState("");
-  const [pageUrl, setPageUrl] = useState("https://");
-  const [captchaType, setCaptchaType] = useState("recaptchav2");
-  const [submitting, setSubmitting] = useState(false);
-  const [polling, setPolling] = useState(false);
-  const [taskId, setTaskId] = useState(null);
-  const [solvedToken, setSolvedToken] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState(null);
-
-  const mode = config?.mode || "community";
-  const provider = config?.provider || "aycd";
-  const canSubmit = mode === "community" || (mode === "personal" && config?.personal_api_key);
-
-  const submit = async () => {
-    if (!siteKey || !pageUrl || !canSubmit) return;
-    setSubmitting(true);
-    setError(null);
-    setSolvedToken(null);
-    setTaskId(null);
-
-    const payload = { action: "submit", mode, provider, captchaType, siteKey, pageUrl };
-    if (mode === "personal") {
-      payload.personalApiKey = config.personal_api_key;
-      payload.personalAccessToken = config.personal_access_token ?? "";
-    }
-
-    const data = await callProxy(payload);
-    if (data?.error) {
-      setError(data.error);
-      if (data.pool_empty) toast.error("Community pool is full — switch to Personal Key");
-      if (data.user_limit_reached) toast.error("Monthly limit of 100 solves reached — switch to Personal Key");
-      setSubmitting(false);
-      return;
-    }
-    const id = data?.taskId || data?.task_id || data?.id;
-    setTaskId(id);
-    toast.success("Task submitted — polling for solution…");
-    setSubmitting(false);
-    setPolling(true);
-  };
+function SolverPanel() {
+  const DATASET_KEY = "knull-test-captcha-dataset-v1";
+  const [difficulty, setDifficulty] = useState("medium");
+  const [challenge, setChallenge] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [result, setResult] = useState(null);
+  const [stats, setStats] = useState({ attempts: 0, correct: 0 });
+  const [dataset, setDataset] = useState([]);
 
   useEffect(() => {
-    if (!polling || !taskId) return;
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      attempts++;
-      if (attempts > 60) {
-        clearInterval(interval);
-        setPolling(false);
-        setError("Timed out waiting for solution");
-        return;
-      }
-      const payload = { action: "poll", mode, provider, taskId };
-      if (mode === "personal") {
-        payload.personalApiKey = config.personal_api_key;
-        payload.personalAccessToken = config.personal_access_token ?? "";
-      }
-      const data = await callProxy(payload);
-      if (data?.token || data?.solution) {
-        clearInterval(interval);
-        setPolling(false);
-        setSolvedToken(data.token || data.solution);
-        toast.success("✅ Captcha solved!");
-      }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [polling, taskId, config]);
+    try {
+      const raw = localStorage.getItem(DATASET_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setDataset(parsed);
+    } catch {
+      setDataset([]);
+    }
+  }, []);
 
-  const copy = () => {
-    navigator.clipboard.writeText(solvedToken);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  useEffect(() => {
+    try {
+      localStorage.setItem(DATASET_KEY, JSON.stringify(dataset));
+    } catch {
+      // Ignore storage write failures (quota/private mode)
+    }
+  }, [dataset]);
+
+  const drawIcon = (ctx, type) => {
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#f8fafc";
+    ctx.fillStyle = "#f8fafc";
+    if (type === "bicycle") {
+      ctx.beginPath(); ctx.arc(28, 70, 14, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(68, 70, 14, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(28, 70); ctx.lineTo(43, 50); ctx.lineTo(58, 70); ctx.lineTo(43, 70); ctx.lineTo(33, 56); ctx.stroke();
+    } else if (type === "bus") {
+      ctx.strokeRect(18, 34, 60, 34);
+      for (let i = 0; i < 4; i++) ctx.strokeRect(24 + i * 13, 40, 10, 10);
+      ctx.beginPath(); ctx.arc(30, 72, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(66, 72, 7, 0, Math.PI * 2); ctx.fill();
+    } else if (type === "traffic light") {
+      ctx.strokeRect(40, 18, 16, 56);
+      [30, 46, 62].forEach((y) => { ctx.beginPath(); ctx.arc(48, y, 5, 0, Math.PI * 2); ctx.stroke(); });
+    } else if (type === "crosswalk") {
+      for (let i = 0; i < 6; i++) ctx.fillRect(16 + i * 12, 28 + (i % 2 ? 2 : 0), 8, 40);
+    }
   };
 
-  if (!canSubmit) return (
-    <div className="text-center py-8 border border-dashed border-white/5 rounded-sm">
-      <Key className="w-7 h-7 text-gray-700 mx-auto mb-2" />
-      <p className="text-sm text-gray-500 font-mono">Add your personal AYCD key above to enable solving</p>
-    </div>
-  );
+  const makeTile = (type, noise) => {
+    const c = document.createElement("canvas");
+    c.width = 96; c.height = 96;
+    const ctx = c.getContext("2d");
+    const hue = Math.floor(Math.random() * 360);
+    ctx.fillStyle = `hsl(${hue} 25% 22%)`;
+    ctx.fillRect(0, 0, 96, 96);
+    for (let i = 0; i < noise; i++) {
+      ctx.fillStyle = `hsla(${Math.floor(Math.random() * 360)} 80% 70% / 0.18)`;
+      ctx.fillRect(Math.random() * 96, Math.random() * 96, Math.random() * 8 + 1, Math.random() * 8 + 1);
+    }
+    drawIcon(ctx, type);
+    return c.toDataURL("image/png");
+  };
+
+  const generateChallenge = () => {
+    const cfg = TEST_DIFFICULTIES.find((d) => d.value === difficulty) || TEST_DIFFICULTIES[1];
+    const target = TEST_TARGETS[Math.floor(Math.random() * TEST_TARGETS.length)];
+    const targetCount = cfg.targetCount[0] + Math.floor(Math.random() * (cfg.targetCount[1] - cfg.targetCount[0] + 1));
+    const targetPositions = new Set();
+    while (targetPositions.size < targetCount) targetPositions.add(Math.floor(Math.random() * 9));
+
+    const tiles = Array.from({ length: 9 }, (_, idx) => {
+      const isTarget = targetPositions.has(idx);
+      const decoyOptions = TEST_TARGETS.filter((t) => t !== target);
+      const tileType = isTarget ? target : decoyOptions[Math.floor(Math.random() * decoyOptions.length)];
+      return {
+        id: idx,
+        isTarget,
+        type: tileType,
+        image: makeTile(tileType, cfg.noise),
+      };
+    });
+
+    setChallenge({ target, tiles, answers: targetPositions, difficulty: cfg.value });
+    setSelected(new Set());
+    setResult(null);
+  };
+
+  const toggle = (id) => {
+    if (result) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const submitTest = () => {
+    if (!challenge) return;
+    const expected = [...challenge.answers].sort((a, b) => a - b).join(",");
+    const got = [...selected].sort((a, b) => a - b).join(",");
+    const ok = expected === got;
+    setResult({ ok, expected: challenge.answers, got: selected });
+    setStats((s) => ({ attempts: s.attempts + 1, correct: s.correct + (ok ? 1 : 0) }));
+    const selectedIds = [...selected].sort((a, b) => a - b);
+    const answerIds = [...challenge.answers].sort((a, b) => a - b);
+    const rec = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ts: new Date().toISOString(),
+      difficulty: challenge.difficulty,
+      target: challenge.target,
+      selected_ids: selectedIds,
+      answer_ids: answerIds,
+      correct: ok,
+      tiles: challenge.tiles.map((t) => ({ id: t.id, type: t.type, is_target: t.isTarget })),
+    };
+    setDataset((prev) => [rec, ...prev].slice(0, 5000));
+    if (ok) toast.success("Test captcha solved correctly");
+    else toast.error("Incorrect selection — review misses/highlights");
+  };
+
+  const downloadText = (filename, text, type = "text/plain") => {
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportJsonl = () => {
+    if (!dataset.length) return;
+    const jsonl = dataset.map((r) => JSON.stringify(r)).join("\n");
+    downloadText(`captcha-test-dataset-${new Date().toISOString().slice(0, 10)}.jsonl`, jsonl, "application/jsonl");
+    toast.success(`Exported ${dataset.length} records (JSONL)`);
+  };
+
+  const exportCsv = () => {
+    if (!dataset.length) return;
+    const esc = (v) => `"${String(v).replaceAll('"', '""')}"`;
+    const header = ["id", "ts", "difficulty", "target", "correct", "selected_ids", "answer_ids", "tile_types"].join(",");
+    const lines = dataset.map((r) => {
+      const types = (r.tiles || []).map((t) => t.type).join("|");
+      return [
+        esc(r.id),
+        esc(r.ts),
+        esc(r.difficulty),
+        esc(r.target),
+        esc(r.correct),
+        esc((r.selected_ids || []).join("|")),
+        esc((r.answer_ids || []).join("|")),
+        esc(types),
+      ].join(",");
+    });
+    downloadText(`captcha-test-dataset-${new Date().toISOString().slice(0, 10)}.csv`, [header, ...lines].join("\n"), "text/csv");
+    toast.success(`Exported ${dataset.length} records (CSV)`);
+  };
+
+  const exportHardNegativesJsonl = () => {
+    const hard = dataset.filter((r) => !r.correct);
+    if (!hard.length) return;
+    const jsonl = hard.map((r) => JSON.stringify(r)).join("\n");
+    downloadText(`captcha-test-hard-negatives-${new Date().toISOString().slice(0, 10)}.jsonl`, jsonl, "application/jsonl");
+    toast.success(`Exported ${hard.length} hard negatives (JSONL)`);
+  };
+
+  const clearDataset = () => {
+    setDataset([]);
+    toast("Dataset cleared");
+  };
 
   return (
-    <div className="space-y-3">
-      <div>
-        <Label className="text-xs text-gray-400 font-mono">Captcha Type</Label>
-        <Select value={captchaType} onValueChange={setCaptchaType}>
-          <SelectTrigger className="bg-white/5 border-white/10 font-mono text-sm mt-1 h-9"><SelectValue /></SelectTrigger>
-          <SelectContent className="bg-[#1a1a24] border-white/10">
-            {CAPTCHA_TYPES.map((t) => <SelectItem key={t.value} value={t.value} className="font-mono text-xs text-gray-100">{t.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-xs text-gray-400 font-mono">Test Difficulty</Label>
+          <Select value={difficulty} onValueChange={setDifficulty}>
+            <SelectTrigger className="bg-white/5 border-white/10 font-mono text-sm mt-1 h-9"><SelectValue /></SelectTrigger>
+            <SelectContent className="bg-[#1a1a24] border-white/10">
+              {TEST_DIFFICULTIES.map((d) => <SelectItem key={d.value} value={d.value} className="font-mono text-xs text-gray-100">{d.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="rounded-sm border border-white/5 bg-white/[0.02] px-3 py-2 mt-6">
+          <p className="text-[10px] font-mono text-gray-500">Accuracy</p>
+          <p className="text-xs font-mono text-gray-300 mt-0.5">{stats.attempts ? Math.round((stats.correct / stats.attempts) * 100) : 0}% ({stats.correct}/{stats.attempts})</p>
+          <p className="text-[10px] font-mono text-gray-500 mt-1">Dataset: {dataset.length} records</p>
+        </div>
       </div>
-      <div>
-        <Label className="text-xs text-gray-400 font-mono">Site Key</Label>
-        <Input value={siteKey} onChange={(e) => setSiteKey(e.target.value)} placeholder="6LcXXXXXXXXXXXXXXXXXXXXXXXXXXXX" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Button onClick={exportJsonl} disabled={!dataset.length} variant="outline" className="border-white/10 text-gray-400 font-mono text-xs h-8">Export JSONL</Button>
+        <Button onClick={exportCsv} disabled={!dataset.length} variant="outline" className="border-white/10 text-gray-400 font-mono text-xs h-8">Export CSV</Button>
+        <Button onClick={exportHardNegativesJsonl} disabled={!dataset.some((r) => !r.correct)} variant="outline" className="border-amber-500/20 text-amber-400 font-mono text-xs h-8">Hard Negatives</Button>
+        <Button onClick={clearDataset} disabled={!dataset.length} variant="outline" className="border-red-500/20 text-red-400 font-mono text-xs h-8">Clear</Button>
       </div>
-      <div>
-        <Label className="text-xs text-gray-400 font-mono">Page URL</Label>
-        <Input value={pageUrl} onChange={(e) => setPageUrl(e.target.value)} placeholder="https://example.com/checkout" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-      </div>
-      <Button onClick={submit} disabled={submitting || polling || !siteKey || !pageUrl}
-        className="w-full bg-violet-600 hover:bg-violet-700 font-mono text-xs gap-2">
-        {submitting || polling
-          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />{submitting ? "Submitting…" : "Solving…"}</>
-          : <><Send className="w-3.5 h-3.5" />Submit Captcha Task</>}
+
+      <Button onClick={generateChallenge} className="w-full bg-violet-600 hover:bg-violet-700 font-mono text-xs gap-2">
+        <RefreshCw className="w-3.5 h-3.5" /> Generate Test Captcha
       </Button>
 
-      {polling && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-yellow-500/10 border border-yellow-500/20 rounded-sm">
-          <Loader2 className="w-3.5 h-3.5 text-yellow-400 animate-spin flex-shrink-0" />
-          <p className="text-[10px] font-mono text-yellow-400">Waiting for AYCD… task: {taskId}</p>
+      {!challenge && (
+        <div className="text-center py-8 border border-dashed border-white/5 rounded-sm">
+          <Key className="w-7 h-7 text-gray-700 mx-auto mb-2" />
+          <p className="text-sm text-gray-500 font-mono">Generate a challenge to begin internal image captcha testing</p>
         </div>
       )}
 
-      {solvedToken && (
-        <div className="space-y-2">
-          <p className="text-[10px] font-mono text-emerald-400 uppercase tracking-widest">Solved Token</p>
-          <div className="relative">
-            <div className="px-3 py-2.5 bg-emerald-500/5 border border-emerald-500/20 rounded-sm font-mono text-[10px] text-gray-300 break-all leading-relaxed max-h-28 overflow-y-auto pr-10">
-              {solvedToken}
-            </div>
-            <button onClick={copy} className="absolute top-2 right-2 p-1 text-gray-500 hover:text-emerald-400">
-              {copied ? <CheckCheck className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            </button>
+      {challenge && (
+        <>
+          <div className="px-3 py-2 bg-blue-500/10 border border-blue-500/20 rounded-sm">
+            <p className="text-[10px] font-mono text-blue-300">Select all images with <span className="text-blue-100 font-semibold">{challenge.target}</span></p>
           </div>
-          <Button onClick={() => { setSolvedToken(null); setTaskId(null); }} variant="outline" className="w-full border-white/10 text-gray-500 font-mono text-xs gap-1.5 h-8">
-            <RefreshCw className="w-3 h-3" /> Solve Another
-          </Button>
-        </div>
-      )}
 
-      {error && (
-        <div className="px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-sm">
-          <p className="text-[10px] font-mono text-red-400">⚠ {error}</p>
-        </div>
+          <div className="grid grid-cols-3 gap-2">
+            {challenge.tiles.map((tile) => {
+              const isSelected = selected.has(tile.id);
+              const isMissed = result && tile.isTarget && !isSelected;
+              const isWrong = result && !tile.isTarget && isSelected;
+              return (
+                <button key={tile.id} onClick={() => toggle(tile.id)}
+                  className={`relative rounded-sm overflow-hidden border transition-all ${isMissed ? "border-yellow-400" : isWrong ? "border-red-500" : isSelected ? "border-violet-400" : "border-white/10 hover:border-white/20"}`}>
+                  <img src={tile.image} alt={`captcha tile ${tile.id}`} className="w-full h-24 object-cover" />
+                  {isSelected && <div className="absolute inset-0 ring-2 ring-violet-400/70 pointer-events-none" />}
+                  {result && tile.isTarget && <div className="absolute top-1 left-1 text-[9px] font-mono px-1 rounded bg-emerald-500/80 text-white">target</div>}
+                </button>
+              );
+            })}
+          </div>
+
+          <Button onClick={submitTest} disabled={!!result} className="w-full bg-emerald-600 hover:bg-emerald-700 font-mono text-xs gap-2">
+            <CheckCheck className="w-3.5 h-3.5" /> Test Captcha
+          </Button>
+
+          {result && (
+            <div className={`px-3 py-2 rounded-sm border ${result.ok ? "bg-emerald-500/10 border-emerald-500/20" : "bg-red-500/10 border-red-500/20"}`}>
+              <p className={`text-[10px] font-mono ${result.ok ? "text-emerald-400" : "text-red-400"}`}>
+                {result.ok ? "PASS — selection matched target tiles" : "FAIL — incorrect tile selection"}
+              </p>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -426,7 +535,7 @@ export default function CaptchaSolver() {
       const c = (Array.isArray(configs) ? configs : [])[0] || null;
       setConfig(c);
       if (c?.mode) setCurrentMode(c.mode);
-    } catch (_) {
+    } catch {
       setConfig(null);
     } finally {
       setLoading(false);
@@ -512,7 +621,7 @@ export default function CaptchaSolver() {
       {/* Solver */}
       <div className="relative p-4 rounded-sm border border-white/5 bg-[#08080f]">
         <div className="absolute top-0 left-0 w-3 h-3 border-t border-l border-violet-500/20" />
-        <p className="text-[10px] font-mono text-gray-500 uppercase tracking-widest mb-4">Submit Captcha Task</p>
+        <p className="text-[10px] font-mono text-gray-500 uppercase tracking-widest mb-4">Test Captcha</p>
         <SolverPanel config={config} />
       </div>
     </div>
