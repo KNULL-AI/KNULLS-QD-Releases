@@ -184,7 +184,7 @@ try {
 } catch (_) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LIVE QUEUE WAIT DETECTION (Pokemon Center)
+// LIVE QUEUE WAIT DETECTION (all retailers)
 // Reports "Estimated wait time" to main process so the Queue Leaderboard can
 // show live shortest-wait ranking across active browser instances.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,19 +194,47 @@ let _lastQueueSendAt = 0;
 
 function parseQueueWaitMs(text) {
   if (!text) return null;
-  const m = text.match(/estimated\s+wait\s+time\s*:?\s*(\d{1,2}):(\d{2}):(\d{2})/i);
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  const sec = Number(m[3]);
-  if (!Number.isFinite(h) || !Number.isFinite(min) || !Number.isFinite(sec)) return null;
-  return ((h * 3600) + (min * 60) + sec) * 1000;
+
+  // HH:MM:SS format
+  let m = text.match(/(?:estimated\s+)?wait\s+time\s*:?\s*(\d{1,2}):(\d{2}):(\d{2})/i)
+    || text.match(/virtual\s+queue[^\n]*?(\d{1,2}):(\d{2}):(\d{2})/i);
+  if (m) {
+    const h = Number(m[1]);
+    const min = Number(m[2]);
+    const sec = Number(m[3]);
+    if (Number.isFinite(h) && Number.isFinite(min) && Number.isFinite(sec)) {
+      return ((h * 3600) + (min * 60) + sec) * 1000;
+    }
+  }
+
+  // MM:SS format
+  m = text.match(/(?:estimated\s+)?wait\s+time\s*:?\s*(\d{1,3}):(\d{2})(?!:)/i);
+  if (m) {
+    const min = Number(m[1]);
+    const sec = Number(m[2]);
+    if (Number.isFinite(min) && Number.isFinite(sec)) {
+      return ((min * 60) + sec) * 1000;
+    }
+  }
+
+  // Textual formats, e.g. "wait time: 50 minutes" / "1 hour 20 minutes"
+  const hm = text.match(/(?:estimated\s+)?wait\s+time\s*:?\s*(?:(\d+)\s*hour[s]?)?\s*(?:(\d+)\s*minute[s]?)?/i);
+  if (hm && (hm[1] || hm[2])) {
+    const h = Number(hm[1] || 0);
+    const min = Number(hm[2] || 0);
+    if (Number.isFinite(h) && Number.isFinite(min)) {
+      return ((h * 3600) + (min * 60)) * 1000;
+    }
+  }
+
+  return null;
 }
 
 function readQueueWaitMsFromDom() {
   const txt = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
   if (!txt) return null;
-  if (!/virtual\s+queue|estimated\s+wait\s+time|access\s+pokemon\s+center/i.test(txt)) return null;
+  // Queue pages vary by retailer — keep this broad but still queue-specific.
+  if (!/virtual\s+queue|estimated\s+wait\s+time|you('?|\sa)re\s+in\s+the\s+queue|queue\s+to\s+access/i.test(txt)) return null;
   return parseQueueWaitMs(txt);
 }
 
