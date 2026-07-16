@@ -17,35 +17,41 @@
  */
 
 // ── In-memory fallback for browser dev mode ───────────────────────────────────
+/** @type {Record<string, any[]>} */
 const memStore = {};
+/** @type {Record<string, Array<(event: { type: string, data: any }) => void>>} */
 const memSubs = {};
 
 function memId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+/** @param {string} table */
 function getStore(table) {
   if (!memStore[table]) memStore[table] = [];
   return memStore[table];
 }
 
+/** @param {string} table @param {string} type @param {any} data */
 function notify(table, type, data) {
   (memSubs[table] || []).forEach((cb) => cb({ type, data }));
 }
 
+/** @param {Record<string, any>} record @param {Record<string, any>} query */
 function matchesFilter(record, query) {
   return Object.entries(query).every(([k, v]) => record[k] === v);
 }
 
 // ── IPC bridge ────────────────────────────────────────────────────────────────
 function isElectron() {
-  return typeof window !== "undefined" && !!window.electronAPI;
+  return typeof window !== "undefined" && !!(/** @type {any} */ (window)).electronAPI;
 }
 
+/** @param {string} channel @param {any} payload */
 async function ipc(channel, payload) {
   if (!isElectron()) return null;
   try {
-    return await window.electronAPI.invoke(channel, payload);
+    return await (/** @type {any} */ (window)).electronAPI.invoke(channel, payload);
   } catch (e) {
     console.error(`[db] IPC error on ${channel}:`, e);
     return null;
@@ -53,6 +59,7 @@ async function ipc(channel, payload) {
 }
 
 // ── Collection factory ────────────────────────────────────────────────────────
+/** @param {string} table */
 function makeCollection(table) {
   return {
     async list(sort = "-created_date", limit = 500) {
@@ -86,6 +93,7 @@ function makeCollection(table) {
       return rows.slice(0, limit);
     },
 
+    /** @param {string} id */
     async get(id) {
       if (isElectron()) {
         return ipc("db:get", { table, id });
@@ -93,6 +101,7 @@ function makeCollection(table) {
       return getStore(table).find((r) => r.id === id) || null;
     },
 
+    /** @param {Record<string, any>} data */
     async create(data) {
       if (isElectron()) {
         const result = await ipc("db:create", { table, data });
@@ -105,6 +114,7 @@ function makeCollection(table) {
       return record;
     },
 
+    /** @param {string} id @param {Record<string, any>} data */
     async update(id, data) {
       if (isElectron()) {
         const result = await ipc("db:update", { table, id, data });
@@ -119,6 +129,7 @@ function makeCollection(table) {
       return store[idx];
     },
 
+    /** @param {string} id */
     async delete(id) {
       if (isElectron()) {
         await ipc("db:delete", { table, id });
@@ -133,36 +144,43 @@ function makeCollection(table) {
       }
     },
 
+    /** @param {Array<Record<string, any>>} items */
     async bulkCreate(items) {
       if (isElectron()) {
         const results = await ipc("db:bulkCreate", { table, items });
-        results.forEach((r) => notify(table, "create", r));
+        /** @type {any[]} */ (results).forEach((/** @type {any} */ r) => notify(table, "create", r));
         return results;
       }
-      const created = items.map((data) => ({
+      const created = items.map((/** @type {Record<string, any>} */ data) => ({
         id: memId(), created_date: new Date().toISOString(), updated_date: new Date().toISOString(), ...data,
       }));
       getStore(table).unshift(...created);
-      created.forEach((r) => notify(table, "create", r));
+      created.forEach((/** @type {any} */ r) => notify(table, "create", r));
       return created;
     },
 
+    /** @param {Array<Record<string, any>>} items */
     async bulkUpdate(items) {
       if (isElectron()) {
         const results = await ipc("db:bulkUpdate", { table, items });
-        results.forEach((r) => notify(table, "update", r));
+        /** @type {any[]} */ (results).forEach((/** @type {any} */ r) => notify(table, "update", r));
         return results;
       }
-      return Promise.all(items.map(({ id, ...data }) => this.update(id, data)));
+      return Promise.all(items.map((item) => {
+        const { id, ...data } = /** @type {{ id?: string, [key: string]: any }} */ (item);
+        return this.update(String(id || ""), data);
+      }));
     },
 
+    /** @param {Record<string, any>} query @param {Record<string, any>} patch */
     async updateMany(query, patch) {
       if (isElectron()) {
         const results = await ipc("db:updateMany", { table, query, patch });
-        results.forEach((r) => notify(table, "update", r));
+        /** @type {any[]} */ (results).forEach((/** @type {any} */ r) => notify(table, "update", r));
         return results;
       }
       const store = getStore(table);
+      /** @type {any[]} */
       const updated = [];
       store.forEach((r, i) => {
         if (matchesFilter(r, query)) {
@@ -174,6 +192,7 @@ function makeCollection(table) {
       return updated;
     },
 
+    /** @param {Record<string, any>} query */
     async deleteMany(query) {
       if (isElectron()) {
         await ipc("db:deleteMany", { table, query });
@@ -188,6 +207,7 @@ function makeCollection(table) {
       });
     },
 
+    /** @param {(event: { type: string, data: any }) => void} callback */
     subscribe(callback) {
       if (!memSubs[table]) memSubs[table] = [];
       memSubs[table].push(callback);

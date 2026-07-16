@@ -43,6 +43,9 @@ const ABUSE_MAX_DISTINCT_DEVICES_24H = 4;
 const ABUSE_MAX_DISTINCT_COUNTRIES_24H = 3;
 const ABUSE_MAX_DENY_EVENTS_10M = 12;
 const ABUSE_MAX_BAD_REFRESH_1H = 8;
+const ABUSE_ENFORCE_BLOCKS_DEFAULT = false;
+
+let abuseSchemaInitPromise = null;
 
 export default {
   async fetch(request, env) {
@@ -57,8 +60,6 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname;
-
-    await ensureAbuseSchema(env);
 
     // ── Admin: block/unblock a user ──────────────────────────────────────────
     if (path === "/admin/block" && request.method === "POST") {
@@ -98,6 +99,14 @@ export default {
 
       const { results } = await env.DB.prepare(query).bind(...binds).all();
       return json({ events: results }, 200, cors);
+    }
+
+    // ── Admin: one-time abuse schema migration ───────────────────────────────
+    if (path === "/admin/migrate-abuse" && request.method === "POST") {
+      const adminKey = request.headers.get("Authorization")?.replace("Bearer ", "");
+      if (adminKey !== env.ADMIN_KEY) return json({ error: "Unauthorized" }, 403, cors);
+      await ensureAbuseSchemaOnce(env);
+      return json({ ok: true }, 200, cors);
     }
 
     // ── All other routes expect POST with JSON body ───────────────────────────
@@ -209,6 +218,9 @@ export default {
       }
 
       const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+      if (abuseDecision.reason && !abuseDecision.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: abuseDecision.reason });
+      }
       if (abuseDecision.blocked) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: abuseDecision.reason });
         return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
@@ -258,12 +270,18 @@ export default {
       if (!claims?.ok) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.invalid_token", reason: "invalid_session_token" });
         const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+        if (abuseDecision.reason && !abuseDecision.blocked) {
+          await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: abuseDecision.reason });
+        }
         if (abuseDecision.blocked) return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
         return json({ error: "Invalid session token" }, 403, cors);
       }
       if (claims.payload.sub !== discord_id || claims.payload.did !== device_id) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.subject_mismatch", reason: "token_subject_mismatch" });
         const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+        if (abuseDecision.reason && !abuseDecision.blocked) {
+          await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: abuseDecision.reason });
+        }
         if (abuseDecision.blocked) return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
         return json({ error: "Session token subject mismatch" }, 403, cors);
       }
@@ -279,6 +297,9 @@ export default {
       }
 
       const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
+      if (abuseDecision.reason && !abuseDecision.blocked) {
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "flagged", reason: abuseDecision.reason });
+      }
       if (abuseDecision.blocked) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: abuseDecision.reason });
         return json({ error: "Access revoked due to suspicious activity", blocked: true }, 403, cors);
@@ -377,6 +398,16 @@ async function ensureAbuseSchema(env) {
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_abuse_events_outcome_ts ON abuse_events(outcome, created_ts DESC)").run();
 }
 
+async function ensureAbuseSchemaOnce(env) {
+  if (!abuseSchemaInitPromise) {
+    abuseSchemaInitPromise = ensureAbuseSchema(env).catch((e) => {
+      abuseSchemaInitPromise = null;
+      throw e;
+    });
+  }
+  return abuseSchemaInitPromise;
+}
+
 async function sha256Hex(input) {
   const bytes = new TextEncoder().encode(input);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -398,6 +429,7 @@ function getIp(request) {
 }
 
 async function logAbuseEvent(env, request, { discordId, action, deviceId, outcome, reason }) {
+  await ensureAbuseSchemaOnce(env);
   const createdAt = new Date().toISOString();
   const createdTs = Math.floor(Date.now() / 1000);
   const country = request.headers.get("CF-IPCountry") || "UNK";
@@ -446,10 +478,20 @@ async function evaluateAbuseAndMaybeBlock(env, discordId) {
   else if (denyCount > ABUSE_MAX_DENY_EVENTS_10M) reason = "abuse.deny_burst";
   else if (badRefreshCount > ABUSE_MAX_BAD_REFRESH_1H) reason = "abuse.invalid_refresh_burst";
 
-  if (!reason) return { blocked: false };
+  if (!reason) return { blocked: false, reason: null };
+
+  const enforce = shouldEnforceAbuseBlocks(env);
+  if (!enforce) return { blocked: false, reason };
 
   await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discordId).run();
   return { blocked: true, reason };
+}
+
+function shouldEnforceAbuseBlocks(env) {
+  const raw = (env.ABUSE_ENFORCE_BLOCKS || "").toLowerCase();
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
+  return ABUSE_ENFORCE_BLOCKS_DEFAULT;
 }
 
 function json(data, status = 200, headers = {}) {
