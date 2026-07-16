@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "electron": "cross-env NODE_ENV=development electron .",
     "build:bytecode": "node scripts/compile-bytecode.cjs",
-    "electron:build": "vite build && npm run build:bytecode && electron-builder --win",
+    "build:integrity": "node scripts/generate-integrity-manifest.cjs",
+    "electron:build": "vite build && npm run build:bytecode && npm run build:integrity && electron-builder --win",
     "electron:dev": "concurrently \"npm run dev\" \"cross-env NODE_ENV=development electron .\"",
     "rebuild": "npx @electron/rebuild -f -w better-sqlite3"
   },
@@ -132,9 +133,11 @@
     "eslint-plugin-react-refresh": "^0.4.18",
     "eslint-plugin-unused-imports": "^4.3.0",
     "globals": "^15.14.0",
+    "javascript-obfuscator": "^5.4.7",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.2",
-    "vite": "^6.1.0"
+    "vite": "^6.1.0",
+    "vite-plugin-javascript-obfuscator": "^3.1.0"
   }
 }

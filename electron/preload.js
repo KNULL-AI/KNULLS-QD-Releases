@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Cloudflare Worker activation requests (bypasses CORS)
   cfRequest: (params) => ipcRenderer.invoke("cf-request", params),
+  getDeviceId: () => ipcRenderer.invoke("get-device-id"),
 
   // Discord OAuth2 SSO — opens popup, intercepts redirect, returns user info
   discordOAuthLogin: (cfEndpoint) => ipcRenderer.invoke("discord-oauth-login", { cfEndpoint }),

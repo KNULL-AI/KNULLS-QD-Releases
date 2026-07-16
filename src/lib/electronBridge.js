@@ -168,6 +168,10 @@ export function cfRequest(url, body) {
   return invoke("cfRequest", { url, body });
 }
 
+export function getDeviceId() {
+  return invoke("getDeviceId");
+}
+
 /** Start/stop the background IMAP poll loop — runs in main process, survives page navigation */
 export function startImapPoll() {
   return invoke("startImapPoll");
