@@ -44,6 +44,8 @@ const ABUSE_MAX_DISTINCT_COUNTRIES_24H = 3;
 const ABUSE_MAX_DENY_EVENTS_10M = 12;
 const ABUSE_MAX_BAD_REFRESH_1H = 8;
 const ABUSE_ENFORCE_BLOCKS_DEFAULT = false;
+const ABUSE_BLOCK_ON_SOFT_SIGNALS_DEFAULT = false;
+const ALLOW_SELF_UNBLOCK_ON_REGISTER_DEFAULT = true;
 
 let abuseSchemaInitPromise = null;
 
@@ -145,8 +147,15 @@ export default {
       // Check if already registered and blocked
       const existing = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
       if (existing?.blocked) {
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
-        return json({ error: "Your access has been revoked by an administrator.", blocked: true }, 403, cors);
+        if (shouldAllowSelfUnblockOnRegister(env)) {
+          // User has already passed live guild membership check above using their own token.
+          // Allow recovery from accidental/temporary blocks during activation retries.
+          await env.DB.prepare("UPDATE users SET blocked = 0 WHERE discord_id = ?").bind(discord_id).run();
+          await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "allow", reason: "self_unblock_register" });
+        } else {
+          await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
+          return json({ error: "Your access has been revoked by an administrator.", blocked: true }, 403, cors);
+        }
       }
 
       const now = new Date().toISOString();
@@ -351,14 +360,22 @@ export default {
 
 // ── Helper: verify guild membership via Discord Bot API ───────────────────────
 async function verifyGuildMember(botToken, guildId, userId) {
-  if (!botToken) return { ok: true }; // skip check if no bot token configured (dev mode)
+  if (!botToken) return { ok: true, reason: "no_bot_token" }; // skip check if no bot token configured (dev mode)
   try {
     const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${userId}`, {
       headers: { Authorization: `Bot ${botToken}` },
     });
-    return { ok: res.ok };
+
+    if (res.ok) return { ok: true, reason: "member" };
+
+    // Only 404 is a definitive "not in guild" signal for this endpoint.
+    // 401/403 and other statuses are often bot scope/intent/access issues,
+    // so fail-open to avoid false account revocations.
+    if (res.status === 404) return { ok: false, reason: "not_member" };
+
+    return { ok: true, reason: `discord_status_${res.status}` };
   } catch {
-    return { ok: true }; // network error — grant benefit of the doubt
+    return { ok: true, reason: "network_error" }; // network error — grant benefit of the doubt
   }
 }
 
@@ -473,15 +490,25 @@ async function evaluateAbuseAndMaybeBlock(env, discordId) {
   const badRefreshCount = Number(badRefresh?.c || 0);
 
   let reason = null;
-  if (deviceCount > ABUSE_MAX_DISTINCT_DEVICES_24H) reason = "abuse.too_many_devices";
-  else if (countryCount > ABUSE_MAX_DISTINCT_COUNTRIES_24H) reason = "abuse.too_many_countries";
-  else if (denyCount > ABUSE_MAX_DENY_EVENTS_10M) reason = "abuse.deny_burst";
-  else if (badRefreshCount > ABUSE_MAX_BAD_REFRESH_1H) reason = "abuse.invalid_refresh_burst";
+  let blockable = false;
+  if (deviceCount > ABUSE_MAX_DISTINCT_DEVICES_24H) {
+    reason = "abuse.too_many_devices";
+    blockable = true;
+  } else if (countryCount > ABUSE_MAX_DISTINCT_COUNTRIES_24H) {
+    reason = "abuse.too_many_countries";
+    blockable = true;
+  } else if (denyCount > ABUSE_MAX_DENY_EVENTS_10M) {
+    reason = "abuse.deny_burst";
+    blockable = shouldBlockOnSoftSignals(env);
+  } else if (badRefreshCount > ABUSE_MAX_BAD_REFRESH_1H) {
+    reason = "abuse.invalid_refresh_burst";
+    blockable = shouldBlockOnSoftSignals(env);
+  }
 
   if (!reason) return { blocked: false, reason: null };
 
   const enforce = shouldEnforceAbuseBlocks(env);
-  if (!enforce) return { blocked: false, reason };
+  if (!enforce || !blockable) return { blocked: false, reason };
 
   await env.DB.prepare("UPDATE users SET blocked = 1 WHERE discord_id = ?").bind(discordId).run();
   return { blocked: true, reason };
@@ -492,6 +519,20 @@ function shouldEnforceAbuseBlocks(env) {
   if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
   if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
   return ABUSE_ENFORCE_BLOCKS_DEFAULT;
+}
+
+function shouldBlockOnSoftSignals(env) {
+  const raw = (env.ABUSE_BLOCK_ON_SOFT_SIGNALS || "").toLowerCase();
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
+  return ABUSE_BLOCK_ON_SOFT_SIGNALS_DEFAULT;
+}
+
+function shouldAllowSelfUnblockOnRegister(env) {
+  const raw = (env.ALLOW_SELF_UNBLOCK_ON_REGISTER || "").toLowerCase();
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
+  return ALLOW_SELF_UNBLOCK_ON_REGISTER_DEFAULT;
 }
 
 function json(data, status = 200, headers = {}) {

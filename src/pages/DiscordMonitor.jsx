@@ -109,6 +109,40 @@ function matchesKeyword(content, keyword) {
   return content?.toLowerCase().includes(keyword.toLowerCase());
 }
 
+function getMessageSearchText(msg) {
+  if (!msg) return "";
+  const parts = [];
+  if (typeof msg.content === "string") parts.push(msg.content);
+
+  const embeds = Array.isArray(msg.embeds) ? msg.embeds : [];
+  for (const embed of embeds) {
+    if (typeof embed?.title === "string") parts.push(embed.title);
+    if (typeof embed?.description === "string") parts.push(embed.description);
+    for (const field of (embed?.fields || [])) {
+      if (typeof field?.name === "string") parts.push(field.name);
+      if (typeof field?.value === "string") parts.push(field.value);
+    }
+  }
+
+  // Discord forwarded posts often store the original content in message_snapshots.
+  const snapshots = Array.isArray(msg.message_snapshots) ? msg.message_snapshots : [];
+  for (const snap of snapshots) {
+    const source = snap?.message;
+    if (typeof source?.content === "string") parts.push(source.content);
+    const sourceEmbeds = Array.isArray(source?.embeds) ? source.embeds : [];
+    for (const embed of sourceEmbeds) {
+      if (typeof embed?.title === "string") parts.push(embed.title);
+      if (typeof embed?.description === "string") parts.push(embed.description);
+      for (const field of (embed?.fields || [])) {
+        if (typeof field?.name === "string") parts.push(field.name);
+        if (typeof field?.value === "string") parts.push(field.value);
+      }
+    }
+  }
+
+  return parts.join("\n");
+}
+
 function pickProxy(proxies, mode, index) {
   if (!proxies.length) return null;
   if (mode === "random") return proxies[Math.floor(Math.random() * proxies.length)];
@@ -666,13 +700,14 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
           const keyword = ch.keyword?.trim();
           // Pokemon Center: override keyword to match its specific trigger phrases
           const isPokemon = fresh.retailer_type === "pokemon_center";
-          const pokemonMatch = (content) =>
-            content?.toLowerCase().includes("security change detected") ||
-            content?.toLowerCase().includes("queue detected");
+          const pokemonMatch = (msg) => {
+            const text = getMessageSearchText(msg).toLowerCase();
+            return text.includes("security change detected") || text.includes("queue detected");
+          };
 
           // Find first message that matches keyword AND hasn't already fired a launch
           const triggerMsg = msgs.find((m) =>
-            (isPokemon ? pokemonMatch(m.content) : matchesKeyword(m.content, keyword)) &&
+            (isPokemon ? pokemonMatch(m) : matchesKeyword(m.content, keyword)) &&
             !firedMessageIdsRef.current.has(m.id)
           );
           if (triggerMsg) {
