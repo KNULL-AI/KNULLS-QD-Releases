@@ -48,6 +48,7 @@ const ABUSE_BLOCK_ON_SOFT_SIGNALS_DEFAULT = false;
 const ALLOW_SELF_UNBLOCK_ON_REGISTER_DEFAULT = true;
 const MEMBERSHIP_RUNTIME_FAILS_TO_LOCK_DEFAULT = 3;
 const MEMBERSHIP_RUNTIME_FAIL_WINDOW_SECONDS = 10 * 60;
+const AUTO_UNBLOCK_RECENT_REGISTER_WINDOW_SECONDS = 15 * 60;
 
 let abuseSchemaInitPromise = null;
 
@@ -213,15 +214,20 @@ export default {
         return json({ error: "Missing discord_id" }, 400, cors);
       }
 
-      const user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
+      let user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
       if (!user) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.not_registered", reason: "not_registered" });
         return json({ error: "Not registered", blocked: false }, 403, cors);
       }
       if (user.blocked) {
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
-        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId, reason: "user_blocked" });
-        return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+        const recovered = await tryAutoUnblockFromRecentRegister(env, discord_id);
+        if (!recovered) {
+          await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "deny.blocked", reason: "user_blocked" });
+          await emitLockoutAlert(env, { discordId: discord_id, action, deviceId, reason: "user_blocked" });
+          return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+        }
+        user = { ...user, blocked: 0 };
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId, outcome: "allow", reason: "auto_unblock_recent_register" });
       }
 
       // Re-check guild membership on every launch with safe-but-strict runtime policy.
@@ -253,15 +259,20 @@ export default {
         return json({ error: "Missing discord_id or device_id" }, 400, cors);
       }
 
-      const user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
+      let user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
       if (!user) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.not_registered", reason: "not_registered" });
         return json({ error: "Not registered", blocked: false }, 403, cors);
       }
       if (user.blocked) {
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
-        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: "user_blocked" });
-        return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+        const recovered = await tryAutoUnblockFromRecentRegister(env, discord_id);
+        if (!recovered) {
+          await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
+          await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: "user_blocked" });
+          return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+        }
+        user = { ...user, blocked: 0 };
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "allow", reason: "auto_unblock_recent_register" });
       }
 
       const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
@@ -345,15 +356,20 @@ export default {
         return json({ error: "Session token subject mismatch" }, 403, cors);
       }
 
-      const user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
+      let user = await env.DB.prepare("SELECT * FROM users WHERE discord_id = ?").bind(discord_id).first();
       if (!user) {
         await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.not_registered", reason: "not_registered" });
         return json({ error: "Not registered", blocked: false }, 403, cors);
       }
       if (user.blocked) {
-        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
-        await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: "user_blocked" });
-        return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+        const recovered = await tryAutoUnblockFromRecentRegister(env, discord_id);
+        if (!recovered) {
+          await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "deny.blocked", reason: "user_blocked" });
+          await emitLockoutAlert(env, { discordId: discord_id, action, deviceId: device_id, reason: "user_blocked" });
+          return json({ error: "Access revoked by administrator", blocked: true }, 403, cors);
+        }
+        user = { ...user, blocked: 0 };
+        await logAbuseEvent(env, request, { discordId: discord_id, action, deviceId: device_id, outcome: "allow", reason: "auto_unblock_recent_register" });
       }
 
       const abuseDecision = await evaluateAbuseAndMaybeBlock(env, discord_id);
@@ -502,12 +518,36 @@ async function setBlockedWithAlert(env, request, { discordId, action, deviceId, 
   await emitLockoutAlert(env, { discordId, action, deviceId, reason });
 }
 
+async function tryAutoUnblockFromRecentRegister(env, discordId) {
+  const recentRegisterSuccess = await hasRecentRegisterSuccess(env, discordId);
+  if (!recentRegisterSuccess) return false;
+
+  await env.DB.prepare("UPDATE users SET blocked = 0 WHERE discord_id = ?").bind(discordId).run();
+  return true;
+}
+
+async function hasRecentRegisterSuccess(env, discordId) {
+  if (!discordId) return false;
+  const now = Math.floor(Date.now() / 1000);
+  const sinceTs = now - AUTO_UNBLOCK_RECENT_REGISTER_WINDOW_SECONDS;
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM abuse_events WHERE discord_id = ? AND created_ts >= ? AND action = 'register' AND outcome = 'allow' AND reason = 'register_success'"
+  ).bind(discordId, sinceTs).first();
+  return Number(row?.c || 0) > 0;
+}
+
 async function enforceRuntimeMembership(env, request, { discordId, action, deviceId }) {
   const memberCheck = await verifyGuildMemberWithRetry(env.DISCORD_BOT_TOKEN, REQUIRED_GUILD_ID, discordId);
   if (memberCheck?.ok) return { blocked: false, flagged: false };
 
   const reason = memberCheck?.reason || "unknown";
   if (reason === "not_member") {
+    const recentRegisterSuccess = await hasRecentRegisterSuccess(env, discordId);
+    if (recentRegisterSuccess) {
+      // Register already validated guild membership with the user's own token.
+      // Avoid immediate false lockout from bot-side membership visibility issues.
+      return { blocked: false, flagged: true, reason: "membership_not_member_soft_recent_register" };
+    }
     await setBlockedWithAlert(env, request, {
       discordId,
       action,
@@ -647,6 +687,11 @@ async function evaluateAbuseAndMaybeBlock(env, discordId) {
   }
 
   if (!reason) return { blocked: false, reason: null };
+
+  // Fresh successful register is strong proof of current ownership/membership.
+  // Avoid immediately re-blocking on handshake/refresh due stale abuse history.
+  const recentRegisterSuccess = await hasRecentRegisterSuccess(env, discordId);
+  if (recentRegisterSuccess) return { blocked: false, reason };
 
   const enforce = shouldEnforceAbuseBlocks(env);
   if (!enforce || !blockable) return { blocked: false, reason };

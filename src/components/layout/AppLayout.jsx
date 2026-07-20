@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { Shield, MonitorPlay, LayoutDashboard, Terminal, Radio, ListChecks, ShieldCheck, ScrollText, User, Settings, Users } from "lucide-react";
 import { db } from "@/lib/db";
@@ -26,6 +26,7 @@ const navItems = [
 export default function AppLayout() {
   const location = useLocation();
   const [authState, setAuthState] = useState("checking"); // "checking" | "activated" | "needs_activation" | "blocked"
+  const activationCheckSeq = useRef(0);
 
   useEffect(() => { checkActivation(); }, []);
 
@@ -100,10 +101,14 @@ export default function AppLayout() {
   };
 
   const checkActivation = async () => {
+    const requestSeq = ++activationCheckSeq.current;
     const rows = await db.DiscordVerify.list();
     const record = (Array.isArray(rows) ? rows : [])[0];
 
+    const isCurrent = () => requestSeq === activationCheckSeq.current;
+
     if (!record?.verified || !record?.discord_id) {
+      if (!isCurrent()) return;
       setAuthState("needs_activation");
       return;
     }
@@ -114,14 +119,23 @@ export default function AppLayout() {
         client_nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       });
 
+      if (!isCurrent()) return;
+
       if (data?.blocked) {
         // Mark locally as unverified so they see the gate
         await db.DiscordVerify.update(record.id, { verified: false, license_session_token: null });
+        if (!isCurrent()) return;
         setAuthState("blocked");
       } else if (data?.error) {
         // Non-blocking errors (e.g., transient backend propagation) should
-        // return to activation flow without showing the revoked banner.
-        setAuthState("needs_activation");
+        // return to activation flow only if there is no fresh local activation.
+        const lastSeenMs = record.last_checked ? new Date(record.last_checked).getTime() : 0;
+        if (!isCurrent()) return;
+        if (lastSeenMs && Date.now() - lastSeenMs < OFFLINE_GRACE_MS) {
+          setAuthState("activated");
+        } else {
+          setAuthState("needs_activation");
+        }
       } else {
         // Update last_checked + license token material (if available)
         await db.DiscordVerify.update(record.id, {
@@ -130,11 +144,13 @@ export default function AppLayout() {
           license_expires_at: data.expires_at || record.license_expires_at || null,
           license_refresh_after: data.refresh_after || record.license_refresh_after || null,
         });
+        if (!isCurrent()) return;
         setAuthState("activated");
       }
     } catch {
       // Offline grace: allow cached sessions for a bounded time window.
       const lastSeenMs = record.last_checked ? new Date(record.last_checked).getTime() : 0;
+      if (!isCurrent()) return;
       if (lastSeenMs && Date.now() - lastSeenMs < OFFLINE_GRACE_MS) setAuthState("activated");
       else setAuthState("needs_activation");
     }
