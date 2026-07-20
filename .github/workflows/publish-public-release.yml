@@ -50,6 +50,29 @@ jobs:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASES_TOKEN }}
         run: npm run electron:build -- --publish always
 
+      - name: Publish release and mark latest
+        shell: pwsh
+        env:
+          PUBLIC_RELEASES_TOKEN: ${{ secrets.PUBLIC_RELEASES_TOKEN }}
+        run: |
+          $headers = @{
+            Authorization = "Bearer $env:PUBLIC_RELEASES_TOKEN"
+            Accept = "application/vnd.github+json"
+            "User-Agent" = "knulls-qd-release-workflow"
+          }
+
+          $tagName = "${{ github.ref_name }}"
+          $release = Invoke-RestMethod -Headers $headers "https://api.github.com/repos/KNULL-AI/KNULLS-QD-Releases/releases/tags/$tagName"
+
+          $body = @{
+            draft = $false
+            prerelease = $false
+            make_latest = "true"
+            name = $tagName
+          } | ConvertTo-Json
+
+          Invoke-RestMethod -Method Patch -Headers $headers -ContentType "application/json" -Body $body "https://api.github.com/repos/KNULL-AI/KNULLS-QD-Releases/releases/$($release.id)"
+
       - name: Upload build artifacts (debug)
         if: always()
         uses: actions/upload-artifact@v4
