@@ -233,5 +233,4 @@ export const db = {
   VerificationCode:makeCollection("VerificationCode"),
   WalmartDrop:     makeCollection("WalmartDrop"),
   CaptchaConfig:   makeCollection("CaptchaConfig"),
-  DiscordVerify:   makeCollection("DiscordVerify"),
 };
