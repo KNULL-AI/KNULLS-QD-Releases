@@ -33,11 +33,6 @@ export function fetchDiscordMessages(authHeader, channelId, afterId) {
   return invoke("fetchDiscordMessages", { authHeader, channelId, afterId });
 }
 
-/** Fetch the identity of the token holder (/users/@me) */
-export function fetchDiscordMe(authHeader) {
-  return invoke("fetchDiscordMe", { authHeader });
-}
-
 /** Fetch all guilds (servers) the user/bot belongs to */
 export function fetchDiscordGuilds(authHeader) {
   return invoke("fetchDiscordGuilds", { authHeader });

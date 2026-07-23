@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Radio, Plus, Trash2, Play, Square, ChevronUp, ChevronDown, X, User, Bot, Info, Hash, ShoppingCart, RefreshCw, Edit2, ScrollText, Zap, AlertTriangle, Clock, Swords } from "lucide-react";
+import { Radio, Plus, Trash2, Play, Square, ChevronUp, ChevronDown, X, Bot, Info, Hash, ShoppingCart, RefreshCw, Edit2, ScrollText, Zap, AlertTriangle, Clock, Swords } from "lucide-react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,8 +11,8 @@ import { launchBrowser, fetchDiscordMessages, fetchDiscordGuilds, fetchDiscordGu
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function buildAuthHeader(monitor) {
-  const token = monitor.auth_mode === "bot_token" ? monitor.bot_token : monitor.user_token;
-  return monitor.auth_mode === "bot_token" ? `Bot ${token}` : token;
+  const token = monitor?.bot_token?.trim();
+  return token ? `Bot ${token}` : "";
 }
 
 async function fetchMessages(authHeader, channelId, afterId) {
@@ -362,7 +362,6 @@ function CostcoManualPanel({ assignedGroups, onManualLaunch }) {
 function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [userToken, setUserToken] = useState(monitor.user_token || "");
   const [botToken, setBotToken] = useState(monitor.bot_token || "");
   const [pollInterval, setPollInterval] = useState(String(monitor.poll_interval_seconds || 5));
   const [cooldownSeconds, setCooldownSeconds] = useState(String(monitor.cooldown_seconds ?? 600));
@@ -378,17 +377,8 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
   const [guildSearch, setGuildSearch] = useState("");
   const [channelSearch, setChannelSearch] = useState("");
 
-  useEffect(() => {
-    if (!open || monitor.auth_mode !== "user_token" || userToken) return;
-    (async () => {
-      const rows = await db.DiscordVerify.list().catch(() => []);
-      const rec = Array.isArray(rows) ? rows.find((r) => r?.verified && r?.user_token) || rows[0] : null;
-      if (rec?.user_token) setUserToken(rec.user_token);
-    })();
-  }, [open, monitor.auth_mode, userToken]);
-
-  const currentToken = monitor.auth_mode === "user_token" ? userToken : botToken;
-  const authHeader = monitor.auth_mode === "bot_token" ? `Bot ${currentToken}` : currentToken;
+  const currentToken = botToken;
+  const authHeader = `Bot ${currentToken}`;
 
   const loadGuilds = async () => {
     if (!currentToken.trim()) { toast.error("Paste your token first"); return; }
@@ -433,16 +423,9 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
 
   const submit = async () => {
     setLoading(true);
-    if (monitor.auth_mode === "user_token" && userToken.trim()) {
-      const rows = await db.DiscordVerify.list().catch(() => []);
-      const rec = Array.isArray(rows) ? rows[0] : null;
-      if (rec?.id) {
-        await db.DiscordVerify.update(rec.id, { user_token: userToken.trim() }).catch(() => {});
-      }
-    }
     await db.DiscordMonitor.update(monitor.id, {
-      user_token: monitor.auth_mode === "user_token" ? userToken : monitor.user_token,
-      bot_token: monitor.auth_mode === "bot_token" ? botToken : monitor.bot_token,
+      bot_mode: "bot_token",
+      bot_token: botToken,
       channels: channels.map((ch) => ({ label: ch.label || ch.channel_id, channel_id: ch.channel_id, keyword: ch.keyword || null, last_message_id: ch.last_message_id || null })),
       poll_interval_seconds: Number(pollInterval),
       cooldown_seconds: Number(cooldownSeconds),
@@ -465,18 +448,10 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
         <DialogHeader><DialogTitle className="font-mono text-sm text-violet-400">Edit — {monitor.name}</DialogTitle></DialogHeader>
         <div className="space-y-4 mt-3">
           {/* Token */}
-          {monitor.auth_mode === "user_token" ? (
-            <div>
-              <Label className="text-xs text-gray-400 font-mono">Discord User Token</Label>
-              <Input type="password" value={userToken} onChange={(e) => setUserToken(e.target.value)} placeholder="Paste updated Authorization header value" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-              <p className="text-[10px] font-mono text-yellow-400/70 mt-1">⚠ Update this if you're getting 401 errors</p>
-            </div>
-          ) : (
-            <div>
-              <Label className="text-xs text-gray-400 font-mono">Discord Bot Token</Label>
-              <Input type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="Bot token from Developer Portal" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-            </div>
-          )}
+          <div>
+            <Label className="text-xs text-gray-400 font-mono">Discord Bot Token</Label>
+            <Input type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="Bot token from Developer Portal" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
+          </div>
 
           {/* Channel Picker */}
           <div className="space-y-2">
@@ -649,7 +624,7 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
             </div>
           </div>
 
-          <Button onClick={submit} disabled={loading || channels.length === 0} className="w-full bg-violet-600 hover:bg-violet-700 font-mono text-xs">
+          <Button onClick={submit} disabled={loading || channels.length === 0 || !botToken.trim()} className="w-full bg-violet-600 hover:bg-violet-700 font-mono text-xs">
             {loading ? "Saving…" : `Save Changes — ${channels.length} channel${channels.length !== 1 ? "s" : ""}`}
           </Button>
         </div>
@@ -910,11 +885,22 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
   };
 
   useEffect(() => {
-    if (monitor.is_active) startPolling(monitor);
+    const isBotReady = monitor.bot_mode === "bot_token" && !!monitor.bot_token?.trim();
+    if (monitor.is_active && isBotReady) {
+      startPolling(monitor);
+    } else if (monitor.is_active && !isBotReady) {
+      activeRef.current = false;
+      setActive(false);
+      db.DiscordMonitor.update(monitor.id, { is_active: false }).catch(() => {});
+    }
     return () => { activeRef.current = false; stopLoop(); };
   }, [monitor.id]);
 
   const toggle = async () => {
+    if (!monitor.bot_token) {
+      toast.error("Add a bot token before starting this monitor.");
+      return;
+    }
     const next = !active;
     setActive(next);
     activeRef.current = next;
@@ -938,7 +924,6 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
     toast.success(`🚀 ${tg.name} — ${tg.instance_count || 1} instances launched`);
   };
 
-  const isUserMode = monitor.auth_mode !== "bot_token";
   const channels = monitor.channels || [];
   const assignedGroups = (monitor.task_group_ids || []).map((id) => taskGroups.find((t) => t.id === id)).filter(Boolean);
   const errorList = Object.entries(errors);
@@ -953,9 +938,9 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
           <div className="flex items-center gap-2 flex-wrap">
             <Radio className={`w-3.5 h-3.5 flex-shrink-0 ${active ? "text-violet-400 animate-pulse" : "text-gray-600"}`} />
             <p className="font-mono text-sm text-gray-100">{monitor.name}</p>
-            <span className={`flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded-sm border ${isUserMode ? "border-blue-500/30 bg-blue-500/10 text-blue-400" : "border-gray-500/30 bg-gray-500/10 text-gray-400"}`}>
-              {isUserMode ? <User className="w-2.5 h-2.5" /> : <Bot className="w-2.5 h-2.5" />}
-              {isUserMode ? "User" : "Bot"}
+            <span className="flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded-sm border border-gray-500/30 bg-gray-500/10 text-gray-400">
+              <Bot className="w-2.5 h-2.5" />
+              Bot
             </span>
             {monitor.retailer_type === "walmart" && (
               <span className="flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded-sm border border-yellow-500/30 bg-yellow-500/10 text-yellow-400">
@@ -1092,9 +1077,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [retailerType, setRetailerType] = useState("standard");
-  const [authMode, setAuthMode] = useState("user_token");
   const [name, setName] = useState("");
-  const [userToken, setUserToken] = useState("");
   const [botToken, setBotToken] = useState("");
   const [pollInterval, setPollInterval] = useState("5");
   const [cooldownSeconds, setCooldownSeconds] = useState("600");
@@ -1111,17 +1094,8 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
   const [guildSearch, setGuildSearch] = useState("");
   const [channelSearch, setChannelSearch] = useState("");
 
-  useEffect(() => {
-    if (!open || authMode !== "user_token" || userToken) return;
-    (async () => {
-      const rows = await db.DiscordVerify.list().catch(() => []);
-      const rec = Array.isArray(rows) ? rows.find((r) => r?.verified && r?.user_token) || rows[0] : null;
-      if (rec?.user_token) setUserToken(rec.user_token);
-    })();
-  }, [open, authMode, userToken]);
-
-  const currentToken = authMode === "user_token" ? userToken : botToken;
-  const authHeader = authMode === "bot_token" ? `Bot ${currentToken}` : currentToken;
+  const currentToken = botToken;
+  const authHeader = `Bot ${currentToken}`;
 
   const loadGuilds = async () => {
     if (!currentToken.trim()) { toast.error("Paste your token first"); return; }
@@ -1167,25 +1141,17 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
   const moveUp = (i) => { const a = [...selectedTaskGroupIds]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; setSelectedTaskGroupIds(a); };
   const moveDown = (i) => { const a = [...selectedTaskGroupIds]; [a[i + 1], a[i]] = [a[i], a[i + 1]]; setSelectedTaskGroupIds(a); };
 
-  const hasToken = authMode === "user_token" ? !!userToken : !!botToken;
+  const hasToken = !!botToken;
   const canSubmit = name && hasToken && channels.length > 0;
 
   const submit = async () => {
     if (!canSubmit) return;
     setLoading(true);
-    if (authMode === "user_token" && userToken.trim()) {
-      const rows = await db.DiscordVerify.list().catch(() => []);
-      const rec = Array.isArray(rows) ? rows[0] : null;
-      if (rec?.id) {
-        await db.DiscordVerify.update(rec.id, { user_token: userToken.trim() }).catch(() => {});
-      }
-    }
     await db.DiscordMonitor.create({
       name,
       retailer_type: retailerType,
-      auth_mode: authMode,
-      user_token: authMode === "user_token" ? userToken : null,
-      bot_token: authMode === "bot_token" ? botToken : null,
+      bot_mode: "bot_token",
+      bot_token: botToken,
       channels: channels.map((ch) => ({ label: ch.label || ch.channel_id, channel_id: ch.channel_id, keyword: ch.keyword || null, last_message_id: null })),
       poll_interval_seconds: Number(pollInterval),
       cooldown_seconds: Number(cooldownSeconds),
@@ -1195,7 +1161,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
     });
     toast.success("Monitor created");
     setOpen(false); setLoading(false);
-    setName(""); setUserToken(""); setBotToken(""); setSelectedTaskGroupIds([]);
+    setName(""); setBotToken(""); setSelectedTaskGroupIds([]);
     setChannels([]); setGuilds([]); setGuildChannels([]); setSelectedGuildId("");
     setGuildSearch(""); setChannelSearch("");
     setCooldownSeconds("600"); setRetailerType("standard");
@@ -1248,49 +1214,20 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
             )}
           </div>
 
-          {/* Auth mode */}
-          <div>
-            <Label className="text-xs text-gray-400 font-mono">Auth Mode *</Label>
-            <div className="grid grid-cols-2 gap-2 mt-1">
-              <button onClick={() => setAuthMode("user_token")} className={`flex items-center gap-2 px-3 py-2.5 rounded-sm border text-xs font-mono transition-all ${authMode === "user_token" ? "border-blue-500/50 bg-blue-500/10 text-blue-300" : "border-white/10 bg-white/5 text-gray-500 hover:text-gray-300"}`}>
-                <User className="w-3.5 h-3.5" /> My Discord Account
-              </button>
-              <button onClick={() => setAuthMode("bot_token")} className={`flex items-center gap-2 px-3 py-2.5 rounded-sm border text-xs font-mono transition-all ${authMode === "bot_token" ? "border-gray-500/50 bg-gray-500/10 text-gray-300" : "border-white/10 bg-white/5 text-gray-500 hover:text-gray-300"}`}>
-                <Bot className="w-3.5 h-3.5" /> Bot Token
-              </button>
-            </div>
+          <div className="rounded-sm border border-gray-500/20 bg-gray-500/5 px-3 py-2.5 space-y-1.5">
+            <p className="text-[10px] font-mono text-gray-300 font-semibold">Bot token mode only</p>
+            <p className="text-[10px] font-mono text-gray-500">User Authorization token mode is temporarily disabled for account safety.</p>
           </div>
-
-          {authMode === "user_token" && (
-            <div className="rounded-sm border border-blue-500/20 bg-blue-500/5 px-3 py-2.5 space-y-1.5">
-              <p className="text-[10px] font-mono text-blue-400 font-semibold flex items-center gap-1.5"><Info className="w-3 h-3" /> How to get your Discord user token</p>
-              <ol className="text-[10px] font-mono text-gray-400 space-y-1">
-                <li>1. Open Discord in your <strong className="text-gray-200">browser</strong> (discord.com)</li>
-                <li>2. Press <strong className="text-gray-200">F12</strong> → Network tab</li>
-                <li>3. Type any message in any channel</li>
-                <li>4. Find the <strong className="text-gray-200">messages</strong> POST request</li>
-                <li>5. Under Request Headers, copy the <strong className="text-gray-200">Authorization</strong> value</li>
-              </ol>
-              <p className="text-[10px] font-mono text-yellow-400/80">⚠ Never share your user token. It gives full account access.</p>
-            </div>
-          )}
 
           <div>
             <Label className="text-xs text-gray-400 font-mono">Retailer / Monitor Name *</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Walmart, PokemonCenter, Costco" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
           </div>
 
-          {authMode === "user_token" ? (
-            <div>
-              <Label className="text-xs text-gray-400 font-mono">Discord User Token *</Label>
-              <Input type="password" value={userToken} onChange={(e) => setUserToken(e.target.value)} placeholder="Paste Authorization header value" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-            </div>
-          ) : (
-            <div>
-              <Label className="text-xs text-gray-400 font-mono">Discord Bot Token *</Label>
-              <Input type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="Bot token from Developer Portal" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-            </div>
-          )}
+          <div>
+            <Label className="text-xs text-gray-400 font-mono">Discord Bot Token *</Label>
+            <Input type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="Bot token from Developer Portal" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
+          </div>
 
           {/* Channel Picker */}
           <div className="space-y-2">
@@ -1560,9 +1497,20 @@ export default function DiscordMonitor() {
       db.DiscordMonitor.list("-created_date"),
       db.TaskGroup.list(),
     ]);
-    setMonitors(m);
+    const normalized = Array.isArray(m)
+      ? m.map((monitor) => ({
+          ...monitor,
+          bot_mode: "bot_token",
+        }))
+      : [];
+    setMonitors(normalized);
     setTaskGroups(t);
     setLoading(false);
+
+    await Promise.all((Array.isArray(m) ? m : []).map((monitor) => {
+      if (monitor.bot_mode === "bot_token") return Promise.resolve();
+      return db.DiscordMonitor.update(monitor.id, { bot_mode: "bot_token" }).catch(() => {});
+    }));
   };
 
   useEffect(() => { load(); }, []);

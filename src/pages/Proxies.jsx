@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Activity, Trash2, Filter, ArrowUpDown, CheckSquare, Layers, X, ChevronDown, ChevronRight, FolderOpen, Zap } from "lucide-react";
+import { Activity, Trash2, Filter, ArrowUpDown, CheckSquare, Layers, X, ChevronDown, ChevronRight, FolderOpen, Zap, Edit2, Check } from "lucide-react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +24,9 @@ export default function Proxies() {
   const [assignGroupId, setAssignGroupId] = useState("none");
   const [newGroupName, setNewGroupName] = useState("");
   const [assigning, setAssigning] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState(null);
+  const [editingGroupName, setEditingGroupName] = useState("");
+  const [showEmptyGroups, setShowEmptyGroups] = useState(false);
 
   const loadProxies = async () => {
     try {
@@ -40,6 +43,10 @@ export default function Proxies() {
   const loadGroups = () => db.ProxyGroup.list().then(setProxyGroups);
   useEffect(() => { loadGroups(); }, []);
 
+  const loadAll = async () => {
+    await Promise.all([loadProxies(), loadGroups()]);
+  };
+
   const toggleSelect = (id) => setSelected((prev) => {
     const next = new Set(prev);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -52,6 +59,8 @@ export default function Proxies() {
     next.has(id) ? next.delete(id) : next.add(id);
     return next;
   });
+
+  const collapseAllGroups = () => setExpandedGroups(new Set());
 
   const [checkingGroup, setCheckingGroup] = useState(null); // group id being checked
 
@@ -97,6 +106,74 @@ export default function Proxies() {
     loadGroups();
   };
 
+  const beginEditGroup = (group) => {
+    setEditingGroupId(group.id);
+    setEditingGroupName(group.name || "");
+  };
+
+  const cancelEditGroup = () => {
+    setEditingGroupId(null);
+    setEditingGroupName("");
+  };
+
+  const saveGroupName = async (groupId) => {
+    const nextName = editingGroupName.trim();
+    if (!nextName) return;
+    await db.ProxyGroup.update(groupId, { name: nextName });
+    toast.success("Group name updated");
+    cancelEditGroup();
+    loadGroups();
+  };
+
+  const removeSelectedFromGroup = async (group, groupProxies) => {
+    const selectedInGroup = groupProxies.filter((p) => selected.has(p.id)).map((p) => p.id);
+    if (selectedInGroup.length === 0) {
+      toast.error(`No selected proxies in "${group.name}"`);
+      return;
+    }
+
+    const nextIds = (group.proxy_ids || []).filter((id) => !selectedInGroup.includes(id));
+    await db.ProxyGroup.update(group.id, { proxy_ids: nextIds });
+
+    setSelected((prev) => {
+      const next = new Set(prev);
+      selectedInGroup.forEach((id) => next.delete(id));
+      return next;
+    });
+
+    toast.success(`Removed ${selectedInGroup.length} from "${group.name}"`);
+    loadGroups();
+  };
+
+  const clearGroup = async (group) => {
+    const idsToDelete = group.proxy_ids || [];
+    const total = idsToDelete.length;
+    if (total === 0) {
+      toast.error("Group is already empty");
+      return;
+    }
+
+    // Hard-delete proxies and remove dangling references from all groups.
+    await Promise.all(idsToDelete.map((id) => db.Proxy.delete(id)));
+    await Promise.all(
+      proxyGroups.map(async (g) => {
+        const nextIds = (g.proxy_ids || []).filter((id) => !idsToDelete.includes(id));
+        if (nextIds.length !== (g.proxy_ids || []).length) {
+          await db.ProxyGroup.update(g.id, { proxy_ids: nextIds });
+        }
+      })
+    );
+
+    setSelected((prev) => {
+      const next = new Set(prev);
+      idsToDelete.forEach((id) => next.delete(id));
+      return next;
+    });
+
+    toast.success(`Deleted ${total} proxies from "${group.name}"`);
+    loadAll();
+  };
+
   // Proxies already assigned to any group are shown in Proxy Groups page, not here
   const groupedIds = new Set(proxyGroups.flatMap((g) => g.proxy_ids || []));
   const ungroupedProxies = proxies.filter((p) => !groupedIds.has(p.id));
@@ -106,6 +183,7 @@ export default function Proxies() {
     .sort((a, b) => sortByLatency
       ? ((a.response_time_ms ?? Infinity) - (b.response_time_ms ?? Infinity))
       : 0);
+  const selectedUngroupedIds = filtered.filter((proxy) => selected.has(proxy.id)).map((proxy) => proxy.id);
 
   const handleCheckAll = async () => {
     setCheckingAll(true);
@@ -134,6 +212,22 @@ export default function Proxies() {
     loadProxies();
   };
 
+  const handleDeleteSelectedUngrouped = async () => {
+    if (selectedUngroupedIds.length === 0) return;
+
+    const confirmed = window.confirm(`Delete ${selectedUngroupedIds.length} ungrouped ${selectedUngroupedIds.length === 1 ? "proxy" : "proxies"}?`);
+    if (!confirmed) return;
+
+    await Promise.all(selectedUngroupedIds.map((id) => db.Proxy.delete(id)));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      selectedUngroupedIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    toast.success(`Deleted ${selectedUngroupedIds.length} ungrouped proxies`);
+    loadAll();
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -150,7 +244,7 @@ export default function Proxies() {
           <p className="text-xs text-gray-500 font-mono mt-1">{proxies.length} proxies · {proxies.filter((p) => p.status === "healthy").length} healthy · {groupedIds.size} in groups</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <AddProxyDialog onAdded={loadProxies} />
+          <AddProxyDialog onAdded={loadAll} />
           <Button
             onClick={handleCheckAll}
             disabled={checkingAll || proxies.length === 0}
@@ -197,15 +291,19 @@ export default function Proxies() {
         >
           <ArrowUpDown className="w-3 h-3" /> Sort by Speed
         </button>
-        {filtered.length > 0 && (
-          <button
-            onClick={() => setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map((p) => p.id)))}
-            className="flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded border border-white/10 text-gray-500 hover:text-gray-300 transition-colors"
-          >
-            <CheckSquare className="w-3 h-3" />
-            {selected.size === filtered.length ? "Deselect All" : "Select All"}
-          </button>
-        )}
+        <button
+          onClick={() => setShowEmptyGroups((value) => !value)}
+          className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded border transition-colors ${showEmptyGroups ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" : "border-white/10 text-gray-500 hover:text-gray-300"}`}
+        >
+          <Layers className="w-3 h-3" /> {showEmptyGroups ? "Hide Empty Groups" : "Show Empty Groups"}
+        </button>
+        <button
+          onClick={collapseAllGroups}
+          title="Back to groups"
+          className="flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded border border-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+        >
+          <ChevronRight className="w-3 h-3" /> Back to Groups
+        </button>
       </div>
 
       {/* Group assignment action bar */}
@@ -252,7 +350,7 @@ export default function Proxies() {
           {/* Group folder cards */}
           {proxyGroups.map((group) => {
             const groupProxies = proxies.filter((p) => (group.proxy_ids || []).includes(p.id));
-            if (groupProxies.length === 0) return null;
+            if (!showEmptyGroups && groupProxies.length === 0) return null;
             const isOpen = expandedGroups.has(group.id);
             const healthyCount = groupProxies.filter((p) => p.status === "healthy").length;
             const avgLatency = groupProxies.filter((p) => p.response_time_ms).reduce((sum, p, _, arr) => sum + p.response_time_ms / arr.length, 0);
@@ -275,17 +373,83 @@ export default function Proxies() {
                     title="Select all in group"
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <button
-                    onClick={() => toggleGroupExpand(group.id)}
-                    className="flex-1 flex items-center gap-2 text-left hover:opacity-80 transition-opacity"
-                  >
-                    {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />}
-                    <FolderOpen className="w-3.5 h-3.5 text-emerald-400/70 flex-shrink-0" />
-                    <span className="font-mono text-sm text-gray-100 font-medium">{group.name}</span>
-                    <span className="font-mono text-xs text-gray-500 ml-1">{groupProxies.length} proxies</span>
-                    <span className="font-mono text-xs text-emerald-400 ml-auto">{healthyCount} healthy</span>
-                    {avgLatency > 0 && <span className="font-mono text-xs text-gray-500 ml-3">{Math.round(avgLatency)}ms avg</span>}
-                  </button>
+                  <div className="flex-1 min-w-0">
+                    <button
+                      onClick={() => toggleGroupExpand(group.id)}
+                      className="w-full flex items-center gap-2 text-left hover:opacity-80 transition-opacity"
+                    >
+                      {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />}
+                      <FolderOpen className="w-3.5 h-3.5 text-emerald-400/70 flex-shrink-0" />
+                      {editingGroupId === group.id ? (
+                        <Input
+                          value={editingGroupName}
+                          onChange={(e) => setEditingGroupName(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              saveGroupName(group.id);
+                            }
+                            if (e.key === "Escape") {
+                              e.preventDefault();
+                              cancelEditGroup();
+                            }
+                          }}
+                          className="h-7 w-40 bg-white/5 border-white/10 font-mono text-xs"
+                        />
+                      ) : (
+                        <span className="font-mono text-sm text-gray-100 font-medium truncate">{group.name}</span>
+                      )}
+                      <span className="font-mono text-xs text-gray-500 ml-1">{groupProxies.length} proxies</span>
+                      <span className="font-mono text-xs text-emerald-400 ml-auto">{healthyCount} healthy</span>
+                      {avgLatency > 0 && <span className="font-mono text-xs text-gray-500 ml-3">{Math.round(avgLatency)}ms avg</span>}
+                    </button>
+
+                    {isOpen && (
+                      <div className="mt-1 ml-7 flex items-center gap-1.5">
+                        {editingGroupId === group.id ? (
+                          <>
+                            <button
+                              onClick={() => saveGroupName(group.id)}
+                              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                              title="Save group name"
+                            >
+                              <Check className="w-3 h-3" /> Save
+                            </button>
+                            <button
+                              onClick={cancelEditGroup}
+                              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono bg-white/5 text-gray-500 hover:text-gray-300 transition-colors"
+                              title="Cancel editing"
+                            >
+                              <X className="w-3 h-3" /> Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => beginEditGroup(group)}
+                            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono bg-white/[0.04] text-gray-400 hover:text-gray-200 transition-colors"
+                            title="Rename group"
+                          >
+                            <Edit2 className="w-3 h-3" /> Rename
+                          </button>
+                        )}
+                        <button
+                          onClick={() => removeSelectedFromGroup(group, groupProxies)}
+                          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors"
+                          title="Remove selected proxies from this group"
+                        >
+                          <Trash2 className="w-3 h-3" /> Remove Selected
+                        </button>
+                        <button
+                          onClick={() => clearGroup(group)}
+                          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                          title="Delete all proxies in this group"
+                        >
+                          <Trash2 className="w-3 h-3" /> Delete All
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   {/* Health check button */}
                   <button
                     onClick={(e) => handleCheckGroup(e, group, groupProxies)}
@@ -297,11 +461,11 @@ export default function Proxies() {
                     {checkingGroup === group.id ? "Checking…" : "Check"}
                   </button>
                   <div onClick={(e) => e.stopPropagation()}>
-                    <AddProxyToGroupDialog group={group} onAdded={loadProxies} />
+                    <AddProxyToGroupDialog group={group} onAdded={loadAll} />
                   </div>
                 </div>
                 {/* Expanded proxy rows */}
-                {isOpen && (
+                    {isOpen && groupProxies.length > 0 && (
                   <div className="divide-y divide-white/5 border-t border-white/5">
                     {groupProxies.map((proxy) => (
                       <div key={proxy.id} className="flex items-center gap-2 pl-8 pr-2">
@@ -318,6 +482,11 @@ export default function Proxies() {
                     ))}
                   </div>
                 )}
+                    {isOpen && groupProxies.length === 0 && (
+                      <div className="border-t border-white/5 px-8 py-3 text-[10px] font-mono text-gray-600">
+                        No proxies in this group.
+                      </div>
+                    )}
               </div>
             );
           })}
@@ -327,6 +496,25 @@ export default function Proxies() {
             <>
               {proxyGroups.some((g) => (g.proxy_ids || []).length > 0) && (
                 <p className="text-[10px] font-mono text-gray-600 pt-1">UNGROUPED</p>
+              )}
+              {selectedUngroupedIds.length > 0 && (
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[10px] font-mono text-gray-500">{selectedUngroupedIds.length} selected</span>
+                  <Button
+                    onClick={() => setSelected(new Set(filtered.map((p) => p.id)))}
+                    variant="outline"
+                    className="h-7 px-2.5 bg-transparent border-white/10 text-gray-400 hover:text-gray-200 hover:border-white/20 font-mono text-[10px]"
+                  >
+                    <CheckSquare className="w-3 h-3" /> Select All
+                  </Button>
+                  <Button
+                    onClick={handleDeleteSelectedUngrouped}
+                    variant="outline"
+                    className="h-7 px-2.5 bg-transparent border-red-500/30 text-red-400 hover:text-red-300 hover:border-red-400/50 font-mono text-[10px]"
+                  >
+                    <Trash2 className="w-3 h-3" /> Delete Selected
+                  </Button>
+                </div>
               )}
               {filtered.map((proxy) => (
                 <div key={proxy.id} className="flex items-center gap-2">
