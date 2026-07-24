@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.9 - 2026-07-24
+
+### Highlights
+- Hotfix for rare post-update white-screen launches on some user machines.
+- Added startup diagnostics for main window load failures and renderer exits.
+- Added one-time automatic main window reload when UI fails to finish loading on startup.
+
+### Stability and Behavior
+- Main window now logs `did-fail-load` and `render-process-gone` failures for faster support triage.
+- Startup timeout watchdog retries renderer boot once if initial load stalls.
+- Diagnostic events are persisted to `SystemLog` under source `MainWindow`.
+
 ## 1.0.8 - 2026-07-24
 
 ### Highlights
