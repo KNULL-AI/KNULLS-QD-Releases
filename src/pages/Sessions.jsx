@@ -15,7 +15,7 @@ export default function Sessions() {
     try {
       const data = await db.BrowserSession.list("-created_date", 100);
       setSessions(data);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load sessions");
     }
     setLoading(false);
@@ -25,7 +25,7 @@ export default function Sessions() {
   const sessionsRef = useRef(sessions);
   useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
 
-  const handleCrash = useCallback(async ({ sessionId }) => { // eslint-disable-line react-hooks/exhaustive-deps
+  const handleCrash = useCallback(async ({ sessionId }) => {
     const session = sessionsRef.current.find((s) => s.id === sessionId);
     if (!session || session.status !== "running") return;
 
@@ -44,7 +44,7 @@ export default function Sessions() {
           loadSessions();
           return;
         }
-      } catch (_) {}
+      } catch {}
     }
 
     await db.BrowserSession.update(sessionId, {
@@ -139,7 +139,7 @@ export default function Sessions() {
       // Kill actual browser windows
       await Promise.all(running.map((s) => killBrowser(s.id)));
       toast.success(`Stopped ${running.length} sessions`);
-    } catch (err) {
+    } catch {
       toast.error("Failed to stop all sessions");
     }
     loadSessions();

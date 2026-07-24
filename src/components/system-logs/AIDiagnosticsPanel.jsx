@@ -31,7 +31,7 @@ export default function AIDiagnosticsPanel({ logs }) {
       const untested = proxies.filter((p) => p.status === "untested").length;
       const avgMs = proxies.filter((p) => p.response_time_ms).reduce((s, p) => s + p.response_time_ms, 0) / (healthy || 1);
       proxySummary = `Total: ${total} | Healthy: ${healthy} | Unhealthy: ${unhealthy} | Untested: ${untested} | Avg response: ${Math.round(avgMs)}ms`;
-    } catch (_) {}
+    } catch {}
 
     const res = await geminiAnalyze(logText, proxySummary);
     setLoading(false);

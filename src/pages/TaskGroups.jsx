@@ -29,7 +29,7 @@ const makeBlank = (section) => ({
 });
 
 // ── Task Group Form ───────────────────────────────────────────────────────────
-function TaskGroupForm({ initial, proxyGroups, profiles, accounts, onSave, onCancel = null, loading, section }) {
+function TaskGroupForm({ initial = null, proxyGroups, profiles, accounts, onSave, onCancel = null, loading, section }) {
   const [form, setForm] = useState(initial || makeBlank(section));
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -343,7 +343,7 @@ function TaskGroupCard({ group, proxyGroups, profiles, accounts, onUpdate, onDel
                     if (urlDraft && urlDraft !== group.target_url) { await db.TaskGroup.update(group.id, { target_url: urlDraft }); onUpdate(); toast.success("URL updated"); }
                     setEditingUrl(false);
                   }}
-                  onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setUrlDraft(group.target_url); setEditingUrl(false); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { setUrlDraft(group.target_url); setEditingUrl(false); } }}
                   className="flex-1 bg-white/5 border border-blue-500/40 rounded px-1.5 py-0.5 text-[10px] font-mono text-blue-200 outline-none min-w-0" />
               ) : (
                 <span className="text-gray-500 truncate cursor-pointer hover:text-blue-300 transition-colors" title="Click to edit URL" onClick={() => { setUrlDraft(group.target_url); setEditingUrl(true); }}>{group.target_url}</span>

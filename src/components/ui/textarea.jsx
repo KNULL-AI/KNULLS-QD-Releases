@@ -1,8 +1,9 @@
+// @ts-nocheck
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-const Textarea = React.forwardRef(({ className, ...props }, ref) => {
+const Textarea = /** @type {any} */ (React.forwardRef(({ className, ...props }, ref) => {
   return (
     (<textarea
       className={cn(
@@ -12,7 +13,7 @@ const Textarea = React.forwardRef(({ className, ...props }, ref) => {
       ref={ref}
       {...props} />)
   );
-})
+}))
 Textarea.displayName = "Textarea"
 
 export { Textarea }

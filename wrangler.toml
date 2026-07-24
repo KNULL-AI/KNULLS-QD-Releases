@@ -9,3 +9,11 @@ database_id = "15a6141f-668b-4802-9607-e68be7a3a74c"
 
 [vars]
 TRIGGER_WS_URL = ""
+
+[[durable_objects.bindings]]
+name = "TRIGGER_BUS"
+class_name = "TriggerBusRoom"
+
+[[migrations]]
+tag = "trigger-bus-v1"
+new_sqlite_classes = ["TriggerBusRoom"]

@@ -43,7 +43,7 @@ export default function DiscordLinkSection({ onVerified }) {
       } else {
         onVerified?.(false);
       }
-    } catch (_) {
+    } catch {
       onVerified?.(false);
     }
   };

@@ -32,9 +32,21 @@ export default {
       const url = new URL(request.url);
       const path = url.pathname;
 
+      if (path === "/v1/triggers" && request.method === "GET") {
+        return await connectTriggerSocket(env, request, url);
+      }
+
+      if (path === "/v1/triggers/test" && request.method === "POST") {
+        const token = parseBearer(request.headers.get("Authorization"));
+        if (!token) throw httpError(401, "Missing user token");
+        const user = await requireUserSession(env, token);
+        const body = await readJson(request);
+        return json(await emitUserTestTrigger(env, user, body), 200, cors);
+      }
+
       if (path === "/v1/activate" && request.method === "POST") {
         const body = await readJson(request);
-        return json(await activateUser(env, body), 200, cors);
+        return json(await activateUser(env, request, body), 200, cors);
       }
 
       if (path === "/v1/token/refresh" && request.method === "POST") {
@@ -82,6 +94,17 @@ export default {
         return json(await revokeKey(env, admin, keyId), 200, cors);
       }
 
+      if (path === "/v1/admin/triggers/test" && request.method === "POST") {
+        const admin = await requireAdmin(env, request);
+        const body = await readJson(request);
+        return json(await emitTestTrigger(env, admin, body), 200, cors);
+      }
+
+      if (path === "/v1/admin/triggers/stats" && request.method === "GET") {
+        const admin = await requireAdmin(env, request);
+        return json(await triggerStats(env, admin), 200, cors);
+      }
+
       return json({ error: "Not found" }, 404, cors);
     } catch (error) {
       const status = error?.status || 500;
@@ -90,7 +113,7 @@ export default {
   },
 };
 
-async function activateUser(env, body) {
+async function activateUser(env, request, body) {
   const key = String(body?.key || "").trim();
   const deviceId = String(body?.device_id || "").trim();
   const appVersion = String(body?.app_version || "").trim() || null;
@@ -146,7 +169,7 @@ async function activateUser(env, body) {
     expires_in: ACCESS_TTL_SECONDS,
     user_id: row.owner_ref || row.id,
     key_id: row.id,
-    ws_url: env.TRIGGER_WS_URL || "",
+    ws_url: String(env.TRIGGER_WS_URL || "").trim() || buildDefaultWsUrl(request.url),
   };
 }
 
@@ -427,6 +450,133 @@ async function listKeyDevices(env, _admin, keyId) {
   };
 }
 
+async function connectTriggerSocket(env, request, url) {
+  const upgrade = request.headers.get("Upgrade");
+  if (!upgrade || upgrade.toLowerCase() !== "websocket") {
+    return json({ error: "Expected websocket upgrade" }, 426);
+  }
+
+  const token = String(url.searchParams.get("token") || "").trim();
+  if (!token) throw httpError(401, "Missing user token");
+
+  const session = await requireUserSession(env, token);
+  const roomId = env.TRIGGER_BUS.idFromName("global");
+  const room = env.TRIGGER_BUS.get(roomId);
+
+  const connectUrl = new URL("https://trigger-bus/v1/connect");
+  connectUrl.searchParams.set("key_id", session.keyId);
+  connectUrl.searchParams.set("device_id", session.deviceId);
+
+  return room.fetch(new Request(connectUrl.toString(), {
+    method: "GET",
+    headers: { Upgrade: "websocket" },
+  }));
+}
+
+async function emitTestTrigger(env, admin, body) {
+  const nowIso = new Date().toISOString();
+  const retailer = String(body?.retailer || "walmart").trim().toLowerCase();
+  const url = String(body?.url || "").trim() || null;
+  const ttlSeconds = Math.max(5, Math.min(120, Number(body?.ttl_seconds || 20)));
+  const triggerId = String(body?.trigger_id || "").trim() || `test:${retailer}:${Date.now()}`;
+
+  const event = {
+    event_id: crypto.randomUUID(),
+    trigger_id: triggerId,
+    retailer,
+    url,
+    detected_at: nowIso,
+    ttl_seconds: ttlSeconds,
+    source: "admin-test",
+    emitted_by: admin.keyId,
+  };
+
+  const room = env.TRIGGER_BUS.get(env.TRIGGER_BUS.idFromName("global"));
+  const res = await room.fetch("https://trigger-bus/v1/emit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event }),
+  });
+  const payload = await res.json().catch(() => ({}));
+
+  return {
+    ok: res.ok,
+    event,
+    delivered: Number(payload?.delivered || 0),
+  };
+}
+
+async function emitUserTestTrigger(env, user, body) {
+  const nowIso = new Date().toISOString();
+  const retailer = String(body?.retailer || "walmart").trim().toLowerCase();
+  const url = String(body?.url || "").trim() || null;
+  const ttlSeconds = Math.max(5, Math.min(120, Number(body?.ttl_seconds || 20)));
+  const triggerId = String(body?.trigger_id || "").trim() || `selftest:${retailer}:${Date.now()}`;
+
+  const event = {
+    event_id: crypto.randomUUID(),
+    trigger_id: triggerId,
+    retailer,
+    url,
+    detected_at: nowIso,
+    ttl_seconds: ttlSeconds,
+    source: "user-self-test",
+    emitted_by: user.keyId,
+    device_id: user.deviceId,
+  };
+
+  const room = env.TRIGGER_BUS.get(env.TRIGGER_BUS.idFromName("global"));
+  const res = await room.fetch("https://trigger-bus/v1/emit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event }),
+  });
+  const payload = await res.json().catch(() => ({}));
+
+  return {
+    ok: res.ok,
+    event,
+    delivered: Number(payload?.delivered || 0),
+  };
+}
+
+async function triggerStats(env, _admin) {
+  const room = env.TRIGGER_BUS.get(env.TRIGGER_BUS.idFromName("global"));
+  const res = await room.fetch("https://trigger-bus/v1/stats");
+  const payload = await res.json().catch(() => ({}));
+  return {
+    connected_clients: Number(payload?.connected_clients || 0),
+    last_emit_at: payload?.last_emit_at || null,
+  };
+}
+
+async function requireUserSession(env, accessToken) {
+  const tokenHash = await sha256Hex(accessToken);
+  const row = await env.DB.prepare(
+    `SELECT * FROM sessions WHERE access_token_hash = ? AND role = 'user' AND revoked_at IS NULL`
+  ).bind(tokenHash).first();
+
+  if (!row) throw httpError(401, "Invalid user token");
+  if (new Date(row.access_expires_at).getTime() < Date.now()) {
+    throw httpError(401, "User token expired");
+  }
+
+  return {
+    sessionId: row.id,
+    keyId: row.key_id,
+    deviceId: row.device_id,
+  };
+}
+
+function buildDefaultWsUrl(requestUrl) {
+  const url = new URL(requestUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/v1/triggers";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
 async function requireAdmin(env, request, opts = {}) {
   const conceal = !!opts.conceal;
   const token = parseBearer(request.headers.get("Authorization"));
@@ -581,4 +731,79 @@ function json(body, status = 200, extraHeaders = {}) {
       ...extraHeaders,
     },
   });
+}
+
+export class TriggerBusRoom {
+  constructor(state) {
+    this.state = state;
+    this.clients = new Set();
+    this.lastEmitAt = null;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/v1/connect") {
+      const upgrade = request.headers.get("Upgrade");
+      if (!upgrade || upgrade.toLowerCase() !== "websocket") {
+        return new Response("Expected websocket", { status: 426 });
+      }
+
+      const pair = new WebSocketPair();
+      const client = pair[0];
+      const server = pair[1];
+      server.accept();
+
+      this.clients.add(server);
+      server.addEventListener("close", () => {
+        this.clients.delete(server);
+      });
+      server.addEventListener("error", () => {
+        this.clients.delete(server);
+      });
+      server.addEventListener("message", () => {
+        // Clients can send ack payloads; they are optional for this bus room.
+      });
+      server.send(JSON.stringify({
+        type: "info",
+        status: "connected",
+        ts: new Date().toISOString(),
+      }));
+
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    if (url.pathname === "/v1/emit" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const event = body?.event;
+      if (!event || typeof event !== "object") {
+        return json({ error: "Missing event payload" }, 400);
+      }
+
+      const payload = JSON.stringify({ type: "trigger", event });
+      let delivered = 0;
+
+      for (const socket of this.clients) {
+        try {
+          socket.send(payload);
+          delivered += 1;
+        } catch {
+          this.clients.delete(socket);
+          try { socket.close(1011, "send failed"); } catch {}
+        }
+      }
+
+      this.lastEmitAt = new Date().toISOString();
+      return json({ ok: true, delivered, last_emit_at: this.lastEmitAt }, 200);
+    }
+
+    if (url.pathname === "/v1/stats") {
+      return json({
+        connected_clients: this.clients.size,
+        last_emit_at: this.lastEmitAt,
+      }, 200);
+    }
+
+    return json({ error: "Not found" }, 404);
+  }
 }

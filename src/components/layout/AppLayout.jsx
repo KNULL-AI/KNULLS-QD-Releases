@@ -7,7 +7,7 @@ const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
   { path: "/proxies", label: "Proxy Pool", icon: Shield },
   { path: "/sessions", label: "Sessions", icon: MonitorPlay },
-  { path: "/discord", label: "Discord", icon: Radio },
+  { path: "/discord", label: "Global Triggers", icon: Radio },
   { path: "/accounts", label: "Accounts", icon: Users },
   { path: "/task-groups", label: "Task Groups", icon: ListChecks },
   { path: "/captcha", label: "Captcha", icon: ShieldCheck },
@@ -45,10 +45,10 @@ export default function AppLayout() {
       {/* Title bar — draggable, houses window controls */}
       <div
         className="relative flex items-center justify-between px-4 h-9 bg-[#05050a] border-b border-white/5 z-20 flex-shrink-0"
-        style={{ WebkitAppRegion: "drag" }}
+        style={/** @type {any} */ ({ WebkitAppRegion: "drag" })}
       >
         {/* Logo + name */}
-        <div className="flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" }}>
+        <div className="flex items-center gap-2" style={/** @type {any} */ ({ WebkitAppRegion: "no-drag" })}>
           <div className="relative w-6 h-6 rounded-sm bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
             <Terminal className="w-3.5 h-3.5 text-emerald-400" />
             <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -61,7 +61,7 @@ export default function AppLayout() {
 
         {/* Window controls */}
         {typeof window !== "undefined" && window.electronAPI && (
-          <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" }}>
+          <div className="flex items-center gap-0.5" style={/** @type {any} */ ({ WebkitAppRegion: "no-drag" })}>
             <div className="hidden sm:flex items-center gap-1.5 text-[9px] font-mono text-gray-600 mr-3">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               SYS ONLINE

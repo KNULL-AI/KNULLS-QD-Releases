@@ -29,7 +29,7 @@ function InlineTimerEdit({ session, onSaved }) {
   const [val, setVal] = useState(session.queue_timer_ms != null ? Math.floor(session.queue_timer_ms / 1000) : "");
 
   const save = async () => {
-    const ms = parseInt(val, 10);
+    const ms = parseInt(String(val), 10);
     await db.BrowserSession.update(session.id, {
       queue_timer_ms: isNaN(ms) ? null : ms * 1000,
     });

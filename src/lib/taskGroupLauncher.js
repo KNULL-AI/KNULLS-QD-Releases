@@ -1,6 +1,38 @@
 import { db } from "@/lib/db";
 import { launchBrowser } from "@/lib/electronBridge";
 
+const LAUNCH_CACHE_TTL_MS = 3000;
+const launchCache = {
+  expiresAt: 0,
+  proxiesById: new Map(),
+  proxyGroupsById: new Map(),
+  walmartAccounts: [],
+};
+
+async function loadLaunchCache(force = false) {
+  const now = Date.now();
+  if (!force && now < launchCache.expiresAt && launchCache.proxiesById.size) {
+    return launchCache;
+  }
+
+  const [proxies, proxyGroups, walmartAccounts] = await Promise.all([
+    db.Proxy.list().catch(() => []),
+    db.ProxyGroup.list().catch(() => []),
+    db.WalmartAccount.list().catch(() => []),
+  ]);
+
+  launchCache.proxiesById = new Map((Array.isArray(proxies) ? proxies : []).map((proxy) => [proxy.id, proxy]));
+  launchCache.proxyGroupsById = new Map((Array.isArray(proxyGroups) ? proxyGroups : []).map((group) => [group.id, group]));
+  launchCache.walmartAccounts = Array.isArray(walmartAccounts) ? walmartAccounts : [];
+  launchCache.expiresAt = now + LAUNCH_CACHE_TTL_MS;
+
+  return launchCache;
+}
+
+export async function prewarmTaskLaunchPath() {
+  await loadLaunchCache(true);
+}
+
 function pickProxy(proxies, mode, index) {
   if (!proxies.length) return null;
   if (mode === "random") return proxies[Math.floor(Math.random() * proxies.length)];
@@ -20,16 +52,26 @@ const resolveAssignedAccounts = (taskGroup, allAccounts) => {
   return (Array.isArray(allAccounts) ? allAccounts : []).filter((account) => desiredIds.includes(normalizeId(account.id)));
 };
 
-async function resolveProxyForAccount(account, groupProxies) {
+async function resolveProxyForAccount(account, groupProxies, cache) {
   if (account.proxy_assignment_type === "single" && account.proxy_id) {
-    const proxy = await db.Proxy.get(account.proxy_id).catch(() => null);
+    const cached = cache?.proxiesById?.get(account.proxy_id) || null;
+    const proxy = cached || await db.Proxy.get(account.proxy_id).catch(() => null);
+    if (proxy?.id && cache?.proxiesById) cache.proxiesById.set(proxy.id, proxy);
     if (proxy) return proxy;
   }
 
   if (account.proxy_assignment_type === "group" && account.proxy_group_id) {
-    const proxyGroup = await db.ProxyGroup.get(account.proxy_group_id).catch(() => null);
+    const cachedGroup = cache?.proxyGroupsById?.get(account.proxy_group_id) || null;
+    const proxyGroup = cachedGroup || await db.ProxyGroup.get(account.proxy_group_id).catch(() => null);
+    if (proxyGroup?.id && cache?.proxyGroupsById) cache.proxyGroupsById.set(proxyGroup.id, proxyGroup);
     if (proxyGroup?.proxy_ids?.length) {
-      const proxies = await Promise.all(proxyGroup.proxy_ids.map((id) => db.Proxy.get(id).catch(() => null)));
+      const proxies = await Promise.all(proxyGroup.proxy_ids.map(async (id) => {
+        const cachedProxy = cache?.proxiesById?.get(id) || null;
+        if (cachedProxy) return cachedProxy;
+        const fetched = await db.Proxy.get(id).catch(() => null);
+        if (fetched?.id && cache?.proxiesById) cache.proxiesById.set(fetched.id, fetched);
+        return fetched;
+      }));
       const found = proxies.find(Boolean);
       if (found) return found;
     }
@@ -39,11 +81,19 @@ async function resolveProxyForAccount(account, groupProxies) {
 }
 
 export async function runTaskGroup(taskGroup) {
+  const cache = await loadLaunchCache();
+
   let proxies = [];
   if (taskGroup.proxy_group_id) {
-    const proxyGroup = await db.ProxyGroup.get(taskGroup.proxy_group_id);
+    const proxyGroup = cache.proxyGroupsById.get(taskGroup.proxy_group_id) || await db.ProxyGroup.get(taskGroup.proxy_group_id);
     if (proxyGroup?.proxy_ids?.length) {
-      const fetched = await Promise.all(proxyGroup.proxy_ids.map((id) => db.Proxy.get(id).catch(() => null)));
+      const fetched = await Promise.all(proxyGroup.proxy_ids.map(async (id) => {
+        const cachedProxy = cache.proxiesById.get(id) || null;
+        if (cachedProxy) return cachedProxy;
+        const proxy = await db.Proxy.get(id).catch(() => null);
+        if (proxy?.id) cache.proxiesById.set(proxy.id, proxy);
+        return proxy;
+      }));
       proxies = fetched.filter(Boolean);
     }
   }
@@ -52,7 +102,7 @@ export async function runTaskGroup(taskGroup) {
   let assignedAccounts = [];
 
   if (isWalmart && taskGroup.account_ids?.length) {
-    const allAccounts = await db.WalmartAccount.list().catch(() => []);
+    const allAccounts = cache.walmartAccounts.length ? cache.walmartAccounts : await db.WalmartAccount.list().catch(() => []);
     assignedAccounts = resolveAssignedAccounts(taskGroup, allAccounts);
   }
 
@@ -63,7 +113,7 @@ export async function runTaskGroup(taskGroup) {
     const sessions = [];
 
     for (const account of assignedAccounts) {
-      const proxy = await resolveProxyForAccount(account, proxies);
+      const proxy = await resolveProxyForAccount(account, proxies, cache);
       const session = await db.BrowserSession.create({
         name: `[AUTO] ${taskGroup.name} - ${account.label}`,
         target_url: taskGroup.target_url,
