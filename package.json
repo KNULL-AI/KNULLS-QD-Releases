@@ -51,7 +51,8 @@
       {
         "provider": "github",
         "owner": "KNULL-AI",
-        "repo": "KNULLS-QD-Releases"
+        "repo": "KNULLS-QD-Releases",
+        "releaseType": "release"
       }
     ]
   },
