@@ -2,7 +2,7 @@
  * KNULL — Session Preload
  * Injected into every task BrowserWindow.
  * - Stealth: removes all Electron/automation fingerprints
- * - Auto-solve: MutationObserver-driven reCAPTCHA v2/v3 + hCaptcha via AYCD
+ * - Captcha detection + token injection hooks for external solvers
  * - Anti-idle: human-like mouse simulation
  * contextIsolation: false — runs in the same JS world as the page.
  */
@@ -277,13 +277,27 @@ try {
 } catch (_) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AYCD AUTO-SOLVE — MutationObserver-driven, zero polling lag
+// CAPTCHA DETECTION + TOKEN INJECTION
 // ─────────────────────────────────────────────────────────────────────────────
 
 let _solving = false;
 let _lastSolvedKey = "";  // siteKey+pathname combo
 let _lastSolvedTs = 0;    // timestamp of last successful solve
-const SOLVE_REUSE_MS = 90000; // re-solve after 90s even on same page (token expiry)
+let _lastDetectedKey = "";
+let _lastDetectedTs = 0;
+
+function emitCaptchaEvent(eventType, info = {}, extra = {}) {
+  try {
+    ipcRenderer.send("captcha-event", {
+      eventType,
+      type: info?.type || null,
+      siteKey: info?.siteKey || null,
+      pageUrl: info?.pageUrl || window.location.href,
+      at: new Date().toISOString(),
+      ...extra,
+    });
+  } catch (_) {}
+}
 
 function detectCaptcha() {
   const url = window.location.href;
@@ -371,28 +385,33 @@ async function trySolve() {
   const info = detectCaptcha();
   if (!info) return;
 
-  const key = info.siteKey + "|" + window.location.pathname;
-  // Allow re-solve if same page but token has likely expired (reCAPTCHA tokens last ~2 min)
-  if (_lastSolvedKey === key && Date.now() - _lastSolvedTs < SOLVE_REUSE_MS) return;
-
-  _solving = true;
-  try {
-    const result = await ipcRenderer.invoke("aycd-autosolve", {
-      type: info.type,
-      siteKey: info.siteKey,
-      pageUrl: info.pageUrl,
-    });
-    if (result.token) {
-      injectToken(info.type, result.token);
-      _lastSolvedKey = key;
-      _lastSolvedTs = Date.now();
-    }
-  } catch (_) {
-    // will retry on next observer trigger or navigation
-  } finally {
-    _solving = false;
+  const detectedKey = info.siteKey + "|" + window.location.pathname + "|" + info.type;
+  if (_lastDetectedKey !== detectedKey || Date.now() - _lastDetectedTs > 30000) {
+    _lastDetectedKey = detectedKey;
+    _lastDetectedTs = Date.now();
+    emitCaptchaEvent("detected", info);
   }
+
+  // Actual solve happens externally (renderer/main solver pipeline).
+  // We keep state here to avoid duplicate challenge notifications.
+  _solving = true;
+  setTimeout(() => { _solving = false; }, 200);
 }
+
+ipcRenderer.on("inject-captcha-token", (_e, payload) => {
+  const type = payload?.type;
+  const token = payload?.token;
+  if (!type || !token) return;
+
+  try {
+    injectToken(type, token);
+    _lastSolvedKey = `${type}|${window.location.pathname}`;
+    _lastSolvedTs = Date.now();
+    emitCaptchaEvent("solved", { type, pageUrl: window.location.href, siteKey: null });
+  } catch (_) {
+    emitCaptchaEvent("error", { type, pageUrl: window.location.href, siteKey: null }, { error: "Token injection failed" });
+  }
+});
 
 // Watch for captcha DOM nodes being added — debounced so heavy mutation bursts
 // (queue sites updating the DOM constantly) don't queue thousands of trySolve calls.

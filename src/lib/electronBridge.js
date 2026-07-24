@@ -59,13 +59,9 @@ export function diagnoseProxy(proxy, url) {
   return Promise.resolve({ status: 0, error: "Not running in Electron" });
 }
 
-/**
- * AYCD AutoSolve API call via Electron's main process.
- * @param {string} action - 'test' | 'submit' | 'poll'
- * @param {object} params
- */
-export function aycdCall(action, params = {}) {
-  return invoke("aycdCall", { action, ...params });
+/** Inject a solved captcha token into a running browser session window */
+export function injectCaptchaToken(sessionId, type, token) {
+  return invoke("injectCaptchaToken", { sessionId, type, token });
 }
 
 /** POST a Discord webhook via Electron's main process (keeps URLs/tokens server-side) */
@@ -136,6 +132,20 @@ export function onSessionLaunched(cb) {
 export function offSessionLaunched(wrapper) {
   if (typeof window !== "undefined" && window.electronAPI?.offSessionLaunched) {
     window.electronAPI.offSessionLaunched(wrapper);
+  }
+}
+
+/** Subscribe to captcha lifecycle events from task windows. Returns wrapper for off*. */
+export function onCaptchaEvent(cb) {
+  if (typeof window !== "undefined" && window.electronAPI?.onCaptchaEvent) {
+    return window.electronAPI.onCaptchaEvent(cb);
+  }
+  return cb;
+}
+
+export function offCaptchaEvent(wrapper) {
+  if (typeof window !== "undefined" && window.electronAPI?.offCaptchaEvent) {
+    window.electronAPI.offCaptchaEvent(wrapper);
   }
 }
 
