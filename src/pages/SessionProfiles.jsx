@@ -31,7 +31,7 @@ function Toggle({ label, value, onChange, description }) {
   );
 }
 
-function ProfileForm({ initial, onSave, onCancel, loading }) {
+function ProfileForm({ initial = null, onSave, onCancel = null, loading }) {
   const [form, setForm] = useState(initial || BLANK);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 

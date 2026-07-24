@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Radio, Plus, Trash2, Play, Square, ChevronUp, ChevronDown, X, Bot, Info, Hash, ShoppingCart, RefreshCw, Edit2, ScrollText, Zap, AlertTriangle, Clock, Swords } from "lucide-react";
+import { Radio, Plus, Trash2, Play, Square, ChevronUp, ChevronDown, X, ShoppingCart, RefreshCw, Edit2, ScrollText, Zap, AlertTriangle, Clock, Swords } from "lucide-react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import toast from "react-hot-toast";
-import { launchBrowser, fetchDiscordMessages, fetchDiscordGuilds, fetchDiscordGuildChannels } from "@/lib/electronBridge";
+import { launchBrowser, fetchDiscordMessages } from "@/lib/electronBridge";
+
+const ENABLE_LOCAL_DISCORD_POLLING = false;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function buildAuthHeader(monitor) {
@@ -80,7 +82,9 @@ function useDiscordLog() {
   useEffect(() => {
     const cb = (l) => setLog(l);
     _logSubs.add(cb);
-    return () => _logSubs.delete(cb);
+    return () => {
+      _logSubs.delete(cb);
+    };
   }, []);
   return log;
 }
@@ -362,61 +366,9 @@ function CostcoManualPanel({ assignedGroups, onManualLaunch }) {
 function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [botToken, setBotToken] = useState(monitor.bot_token || "");
   const [pollInterval, setPollInterval] = useState(String(monitor.poll_interval_seconds || 5));
   const [cooldownSeconds, setCooldownSeconds] = useState(String(monitor.cooldown_seconds ?? 600));
-  const [channels, setChannels] = useState(monitor.channels || []);
   const [selectedTaskGroupIds, setSelectedTaskGroupIds] = useState(monitor.task_group_ids || []);
-
-  // Guild/channel picker
-  const [guilds, setGuilds] = useState([]);
-  const [selectedGuildId, setSelectedGuildId] = useState("");
-  const [guildChannels, setGuildChannels] = useState([]);
-  const [loadingGuilds, setLoadingGuilds] = useState(false);
-  const [loadingChannels, setLoadingChannels] = useState(false);
-  const [guildSearch, setGuildSearch] = useState("");
-  const [channelSearch, setChannelSearch] = useState("");
-
-  const currentToken = botToken;
-  const authHeader = `Bot ${currentToken}`;
-
-  const loadGuilds = async () => {
-    if (!currentToken.trim()) { toast.error("Paste your token first"); return; }
-    setLoadingGuilds(true);
-    setGuilds([]); setGuildChannels([]); setSelectedGuildId("");
-    setGuildSearch(""); setChannelSearch("");
-    const result = await fetchDiscordGuilds(authHeader);
-    setLoadingGuilds(false);
-    if (result.error) { toast.error(`Failed: ${result.error}`); return; }
-    setGuilds(result.guilds || []);
-    if (!result.guilds?.length) toast("No servers found for this token");
-  };
-
-  const loadChannels = async (guildId) => {
-    setSelectedGuildId(guildId);
-    setGuildChannels([]);
-    setChannelSearch("");
-    if (!guildId) return;
-    setLoadingChannels(true);
-    const result = await fetchDiscordGuildChannels(authHeader, guildId);
-    setLoadingChannels(false);
-    if (result.error) { toast.error(`Failed: ${result.error}`); return; }
-    setGuildChannels((result.channels || []).sort((a, b) => a.position - b.position));
-  };
-
-  const toggleChannel = (ch) => {
-    setChannels((prev) => {
-      const exists = prev.find((c) => c.channel_id === ch.id);
-      if (exists) return prev.filter((c) => c.channel_id !== ch.id);
-      return [...prev, { label: ch.name, channel_id: ch.id, keyword: "", last_message_id: null }];
-    });
-  };
-
-  const updateChannelKeyword = (channelId, keyword) => {
-    setChannels((prev) => prev.map((c) => c.channel_id === channelId ? { ...c, keyword } : c));
-  };
-
-  const removeChannel = (channelId) => setChannels((prev) => prev.filter((c) => c.channel_id !== channelId));
 
   const addTG = (id) => { if (id && !selectedTaskGroupIds.includes(id)) setSelectedTaskGroupIds((p) => [...p, id]); };
   const removeTG = (id) => setSelectedTaskGroupIds((p) => p.filter((x) => x !== id));
@@ -424,9 +376,6 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
   const submit = async () => {
     setLoading(true);
     await db.DiscordMonitor.update(monitor.id, {
-      bot_mode: "bot_token",
-      bot_token: botToken,
-      channels: channels.map((ch) => ({ label: ch.label || ch.channel_id, channel_id: ch.channel_id, keyword: ch.keyword || null, last_message_id: ch.last_message_id || null })),
       poll_interval_seconds: Number(pollInterval),
       cooldown_seconds: Number(cooldownSeconds),
       task_group_ids: selectedTaskGroupIds,
@@ -447,118 +396,8 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
       <DialogContent className="bg-[#0d0d16] border-white/10 text-gray-100 max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle className="font-mono text-sm text-violet-400">Edit — {monitor.name}</DialogTitle></DialogHeader>
         <div className="space-y-4 mt-3">
-          {/* Token */}
-          <div>
-            <Label className="text-xs text-gray-400 font-mono">Discord Bot Token</Label>
-            <Input type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="Bot token from Developer Portal" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-          </div>
-
-          {/* Channel Picker */}
-          <div className="space-y-2">
-            <Label className="text-xs text-gray-400 font-mono">Discord Channels</Label>
-
-            <button
-              onClick={loadGuilds}
-              disabled={loadingGuilds || !currentToken.trim()}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-sm border border-violet-500/30 bg-violet-500/10 text-violet-300 font-mono text-xs hover:bg-violet-500/20 disabled:opacity-40 transition-all"
-            >
-              {loadingGuilds
-                ? <><div className="w-3 h-3 border border-violet-400/40 border-t-violet-300 rounded-full animate-spin" /> Loading servers…</>
-                : <><Hash className="w-3.5 h-3.5" /> {guilds.length > 0 ? `Reload Servers (${guilds.length} loaded)` : "Load My Servers"}</>
-              }
-            </button>
-
-            {guilds.length > 0 && (
-              <div>
-                <Label className="text-[10px] text-gray-500 font-mono">Select Server</Label>
-                <Input
-                  value={guildSearch}
-                  onChange={(e) => setGuildSearch(e.target.value)}
-                  placeholder="Search servers..."
-                  className="bg-white/5 border-white/10 font-mono text-[11px] mt-1 h-7"
-                />
-                <div className="mt-0.5 max-h-48 overflow-y-auto border border-white/10 rounded-sm bg-[#1a1a24] space-y-px p-1">
-                  {guilds
-                    .filter((g) => g.name?.toLowerCase().includes(guildSearch.toLowerCase()))
-                    .map((g) => {
-                    const iconUrl = g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=32` : null;
-                    const initials = g.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
-                    return (
-                      <button
-                        key={g.id}
-                        onClick={() => loadChannels(g.id)}
-                        className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-sm text-left text-xs font-mono transition-colors ${selectedGuildId === g.id ? "bg-violet-500/25 text-violet-200" : "text-gray-300 hover:bg-white/5 hover:text-gray-100"}`}
-                      >
-                        {iconUrl ? (
-                          <img src={iconUrl} alt={g.name} className="w-5 h-5 rounded-full flex-shrink-0 object-cover" onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }} />
-                        ) : null}
-                        <span className={`w-5 h-5 rounded-full flex-shrink-0 bg-violet-700/60 items-center justify-center text-[9px] font-bold text-violet-200 ${iconUrl ? "hidden" : "flex"}`}>{initials}</span>
-                        <span className="flex-1 truncate">{g.name}</span>
-                        {selectedGuildId === g.id && <span className="text-[9px] text-violet-400">✓</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {loadingChannels && (
-              <div className="flex items-center gap-2 text-[10px] font-mono text-gray-500 py-1">
-                <div className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin" /> Loading channels…
-              </div>
-            )}
-            {guildChannels.length > 0 && (
-              <div className="space-y-1.5">
-                <Input
-                  value={channelSearch}
-                  onChange={(e) => setChannelSearch(e.target.value)}
-                  placeholder="Search channels..."
-                  className="bg-white/5 border-white/10 font-mono text-[11px] h-7"
-                />
-                <div className="max-h-36 overflow-y-auto space-y-0.5 border border-white/5 rounded-sm p-1.5 bg-black/20">
-                  {guildChannels
-                    .filter((ch) => ch.name?.toLowerCase().includes(channelSearch.toLowerCase()))
-                    .map((ch) => {
-                  const isSelected = channels.some((c) => c.channel_id === ch.id);
-                  return (
-                    <button
-                      key={ch.id}
-                      onClick={() => toggleChannel(ch)}
-                      className={`w-full flex items-center gap-2 px-2 py-1 rounded-sm text-left text-[10px] font-mono transition-colors ${isSelected ? "bg-violet-500/20 text-violet-300" : "text-gray-400 hover:bg-white/5 hover:text-gray-200"}`}
-                    >
-                      <Hash className="w-3 h-3 flex-shrink-0" />
-                      <span className="flex-1 truncate">{ch.name}</span>
-                      {isSelected && <span className="text-[9px] text-violet-400">✓ added</span>}
-                    </button>
-                  );
-                })}
-                </div>
-              </div>
-            )}
-
-            {/* Selected channels with keyword inputs */}
-            {channels.length > 0 && (
-              <div className="space-y-1.5 mt-1">
-                <p className="text-[10px] font-mono text-gray-600 uppercase tracking-widest">{channels.length} channel{channels.length !== 1 ? "s" : ""} selected</p>
-                {channels.map((ch) => (
-                  <div key={ch.channel_id} className="flex items-center gap-2 px-2 py-1.5 bg-violet-500/5 border border-violet-500/10 rounded-sm">
-                    <Hash className="w-2.5 h-2.5 text-violet-400 flex-shrink-0" />
-                    <span className="text-[10px] font-mono text-gray-200 w-28 truncate flex-shrink-0">#{ch.label || ch.channel_id}</span>
-                    <Input
-                      value={ch.keyword || ""}
-                      onChange={(e) => updateChannelKeyword(ch.channel_id, e.target.value)}
-                      placeholder="keyword (blank=any)"
-                      className="bg-white/5 border-white/10 font-mono text-[10px] h-6 flex-1 min-w-0"
-                    />
-                    <button onClick={() => removeChannel(ch.channel_id)} className="text-gray-600 hover:text-red-400 flex-shrink-0"><X className="w-3 h-3" /></button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {guilds.length === 0 && (
-              <p className="text-[10px] font-mono text-gray-600">↑ Click "Load My Servers" to browse and select channels from your Discord.</p>
-            )}
+          <div className="rounded-sm border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5 text-[10px] font-mono text-cyan-300">
+            Discord discovery is now global and backend-managed. Add the task groups this monitor should fire, and set timing here only.
           </div>
 
           {/* Task groups */}
@@ -624,8 +463,8 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
             </div>
           </div>
 
-          <Button onClick={submit} disabled={loading || channels.length === 0 || !botToken.trim()} className="w-full bg-violet-600 hover:bg-violet-700 font-mono text-xs">
-            {loading ? "Saving…" : `Save Changes — ${channels.length} channel${channels.length !== 1 ? "s" : ""}`}
+          <Button onClick={submit} disabled={loading} className="w-full bg-violet-600 hover:bg-violet-700 font-mono text-xs">
+            {loading ? "Saving…" : "Save Changes"}
           </Button>
         </div>
       </DialogContent>
@@ -637,7 +476,7 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
 function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
   const [active, setActive] = useState(monitor.is_active);
   const [lastEvents, setLastEvents] = useState([]); // [{channelLabel, time, instances}]
-  const [errors, setErrors] = useState({});
+  const [errors, setErrors] = useState(/** @type {any} */ ({}));
   const [launchedIds, setLaunchedIds] = useState(new Set()); // tracks manually/auto launched TG ids this session
   const timerRef = useRef(null);       // holds the current setTimeout handle
   const runningRef = useRef(false);    // true while a poll is in flight — prevents stacking
@@ -876,6 +715,15 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
   };
 
   const startPolling = (mon) => {
+    if (!ENABLE_LOCAL_DISCORD_POLLING) {
+      stopLoop();
+      runningRef.current = false;
+      setErrors((prev) => ({
+        ...prev,
+        _global: "Local Discord polling is disabled. This monitor now waits for backend global trigger bus events.",
+      }));
+      return;
+    }
     activeRef.current = true;
     intervalMsRef.current = (mon.poll_interval_seconds || 5) * 1000;
     cursorCacheRef.current = {}; // reset cursor cache on each start
@@ -885,28 +733,19 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
   };
 
   useEffect(() => {
-    const isBotReady = monitor.bot_mode === "bot_token" && !!monitor.bot_token?.trim();
-    if (monitor.is_active && isBotReady) {
+    if (monitor.is_active && ENABLE_LOCAL_DISCORD_POLLING) {
       startPolling(monitor);
-    } else if (monitor.is_active && !isBotReady) {
-      activeRef.current = false;
-      setActive(false);
-      db.DiscordMonitor.update(monitor.id, { is_active: false }).catch(() => {});
     }
     return () => { activeRef.current = false; stopLoop(); };
   }, [monitor.id]);
 
   const toggle = async () => {
-    if (!monitor.bot_token) {
-      toast.error("Add a bot token before starting this monitor.");
-      return;
-    }
     const next = !active;
     setActive(next);
     activeRef.current = next;
     setErrors({});
     await db.DiscordMonitor.update(monitor.id, { is_active: next });
-    if (next) { startPolling({ ...monitor, is_active: true }); pushLog({ type: "info", monitor: monitorNameRef.current, channel: "—", msg: "Monitor started" }); toast.success(`"${monitor.name}" monitor started`); }
+    if (next) { startPolling({ ...monitor, is_active: true }); pushLog({ type: "info", monitor: monitorNameRef.current, channel: "—", msg: "Monitor armed for backend global triggers" }); toast.success(`"${monitor.name}" monitor armed`); }
     else { stopLoop(); syncLaunchedIds(new Set()); pushLog({ type: "info", monitor: monitorNameRef.current, channel: "—", msg: "Monitor stopped" }); toast(`"${monitor.name}" monitor stopped`); }
     onUpdate();
   };
@@ -924,7 +763,6 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
     toast.success(`🚀 ${tg.name} — ${tg.instance_count || 1} instances launched`);
   };
 
-  const channels = monitor.channels || [];
   const assignedGroups = (monitor.task_group_ids || []).map((id) => taskGroups.find((t) => t.id === id)).filter(Boolean);
   const errorList = Object.entries(errors);
 
@@ -939,8 +777,8 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
             <Radio className={`w-3.5 h-3.5 flex-shrink-0 ${active ? "text-violet-400 animate-pulse" : "text-gray-600"}`} />
             <p className="font-mono text-sm text-gray-100">{monitor.name}</p>
             <span className="flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded-sm border border-gray-500/30 bg-gray-500/10 text-gray-400">
-              <Bot className="w-2.5 h-2.5" />
-              Bot
+              <Radio className="w-2.5 h-2.5" />
+              Global
             </span>
             {monitor.retailer_type === "walmart" && (
               <span className="flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded-sm border border-yellow-500/30 bg-yellow-500/10 text-yellow-400">
@@ -958,7 +796,7 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
               </span>
             )}
           </div>
-          <p className="text-[10px] font-mono text-gray-600 mt-0.5">{channels.length} channel{channels.length !== 1 ? "s" : ""} · every {monitor.poll_interval_seconds || 5}s</p>
+          <p className="text-[10px] font-mono text-gray-600 mt-0.5">backend-managed global monitor · every {monitor.poll_interval_seconds || 5}s</p>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <button onClick={toggle} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-mono border transition-all ${active ? "bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20" : "bg-violet-500/10 border-violet-500/20 text-violet-400 hover:bg-violet-500/20"}`}>
@@ -968,21 +806,6 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
           <button onClick={() => onDelete(monitor.id)} className="p-1.5 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       </div>
-
-      {/* Channels list */}
-      {channels.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-[10px] font-mono text-gray-600 uppercase tracking-widest">Channels ({channels.length})</p>
-          {channels.map((ch, i) => (
-            <div key={i} className="flex items-center gap-2 px-2 py-1 bg-white/[0.02] border border-white/5 rounded-sm">
-              <Hash className="w-2.5 h-2.5 text-gray-600 flex-shrink-0" />
-              <span className="text-[10px] font-mono text-gray-300 flex-1 truncate">{ch.label || ch.channel_id}</span>
-              {ch.keyword && <span className="text-[10px] font-mono text-violet-400 flex-shrink-0">"{ch.keyword}"</span>}
-              {errors[ch.channel_id] && <span className="text-[9px] font-mono text-red-400">ERR</span>}
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* Task queue / mode-specific panels */}
       {assignedGroups.length > 0 && (
@@ -1078,71 +901,16 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
   const [loading, setLoading] = useState(false);
   const [retailerType, setRetailerType] = useState("standard");
   const [name, setName] = useState("");
-  const [botToken, setBotToken] = useState("");
   const [pollInterval, setPollInterval] = useState("5");
   const [cooldownSeconds, setCooldownSeconds] = useState("600");
   const [selectedTaskGroupIds, setSelectedTaskGroupIds] = useState([]);
-  // channels: [{label, channel_id, keyword}]
-  const [channels, setChannels] = useState([]);
-
-  // Guild/channel picker state
-  const [guilds, setGuilds] = useState([]);
-  const [selectedGuildId, setSelectedGuildId] = useState("");
-  const [guildChannels, setGuildChannels] = useState([]);
-  const [loadingGuilds, setLoadingGuilds] = useState(false);
-  const [loadingChannels, setLoadingChannels] = useState(false);
-  const [guildSearch, setGuildSearch] = useState("");
-  const [channelSearch, setChannelSearch] = useState("");
-
-  const currentToken = botToken;
-  const authHeader = `Bot ${currentToken}`;
-
-  const loadGuilds = async () => {
-    if (!currentToken.trim()) { toast.error("Paste your token first"); return; }
-    setLoadingGuilds(true);
-    setGuilds([]); setGuildChannels([]); setSelectedGuildId("");
-    setGuildSearch(""); setChannelSearch("");
-    const result = await fetchDiscordGuilds(authHeader);
-    setLoadingGuilds(false);
-    if (result.error) { toast.error(`Failed: ${result.error}`); return; }
-    setGuilds(result.guilds || []);
-    if (!result.guilds?.length) toast("No servers found for this token");
-  };
-
-  const loadChannels = async (guildId) => {
-    setSelectedGuildId(guildId);
-    setGuildChannels([]);
-    setChannelSearch("");
-    if (!guildId) return;
-    setLoadingChannels(true);
-    const result = await fetchDiscordGuildChannels(authHeader, guildId);
-    setLoadingChannels(false);
-    if (result.error) { toast.error(`Failed: ${result.error}`); return; }
-    // Sort by position
-    setGuildChannels((result.channels || []).sort((a, b) => a.position - b.position));
-  };
-
-  const toggleChannel = (ch) => {
-    setChannels((prev) => {
-      const exists = prev.find((c) => c.channel_id === ch.id);
-      if (exists) return prev.filter((c) => c.channel_id !== ch.id);
-      return [...prev, { label: ch.name, channel_id: ch.id, keyword: "" }];
-    });
-  };
-
-  const updateChannelKeyword = (channelId, keyword) => {
-    setChannels((prev) => prev.map((c) => c.channel_id === channelId ? { ...c, keyword } : c));
-  };
-
-  const removeChannel = (channelId) => setChannels((prev) => prev.filter((c) => c.channel_id !== channelId));
 
   const addTG = (id) => { if (id && !selectedTaskGroupIds.includes(id)) setSelectedTaskGroupIds((p) => [...p, id]); };
   const removeTG = (id) => setSelectedTaskGroupIds((p) => p.filter((x) => x !== id));
   const moveUp = (i) => { const a = [...selectedTaskGroupIds]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; setSelectedTaskGroupIds(a); };
   const moveDown = (i) => { const a = [...selectedTaskGroupIds]; [a[i + 1], a[i]] = [a[i], a[i + 1]]; setSelectedTaskGroupIds(a); };
 
-  const hasToken = !!botToken;
-  const canSubmit = name && hasToken && channels.length > 0;
+  const canSubmit = name.trim() && selectedTaskGroupIds.length > 0;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -1150,9 +918,6 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
     await db.DiscordMonitor.create({
       name,
       retailer_type: retailerType,
-      bot_mode: "bot_token",
-      bot_token: botToken,
-      channels: channels.map((ch) => ({ label: ch.label || ch.channel_id, channel_id: ch.channel_id, keyword: ch.keyword || null, last_message_id: null })),
       poll_interval_seconds: Number(pollInterval),
       cooldown_seconds: Number(cooldownSeconds),
       task_group_ids: selectedTaskGroupIds,
@@ -1161,9 +926,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
     });
     toast.success("Monitor created");
     setOpen(false); setLoading(false);
-    setName(""); setBotToken(""); setSelectedTaskGroupIds([]);
-    setChannels([]); setGuilds([]); setGuildChannels([]); setSelectedGuildId("");
-    setGuildSearch(""); setChannelSearch("");
+    setName(""); setSelectedTaskGroupIds([]);
     setCooldownSeconds("600"); setRetailerType("standard");
     onAdded();
   };
@@ -1174,7 +937,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
         <Button className="bg-violet-600 hover:bg-violet-700 text-white font-mono text-xs gap-2"><Plus className="w-3.5 h-3.5" />Add Monitor</Button>
       </DialogTrigger>
       <DialogContent className="bg-[#0d0d16] border-white/10 text-gray-100 max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle className="font-mono text-sm text-violet-400">New Discord Monitor</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className="font-mono text-sm text-violet-400">New Global Monitor</DialogTitle></DialogHeader>
         <div className="space-y-4 mt-3">
 
           {/* Retailer type */}
@@ -1197,13 +960,13 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
             {retailerType === "walmart" && (
               <div className="mt-2 rounded-sm border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-[10px] font-mono text-yellow-400 space-y-1">
                 <p className="font-semibold">Walmart mode — URL-matched launching</p>
-                <p className="text-yellow-400/70">When a drop is detected, the item URL is parsed from the Discord message. Only the TaskGroup whose <strong>Target URL</strong> matches that item URL will be launched. Add one TaskGroup per Walmart item.</p>
+                <p className="text-yellow-400/70">When a drop is detected, the item URL is parsed from the trigger payload. Only the TaskGroup whose <strong>Target URL</strong> matches that item URL will be launched. Add one TaskGroup per Walmart item.</p>
               </div>
             )}
             {retailerType === "costco" && (
               <div className="mt-2 rounded-sm border border-orange-500/20 bg-orange-500/5 px-3 py-2 text-[10px] font-mono text-orange-400 space-y-1">
                 <p className="font-semibold">Costco mode — URL auto-update & launch</p>
-                <p className="text-orange-400/70">Extracts the drop URL from the Discord message (direct link or embedded) and writes it to all assigned TaskGroups, then fires. Falls back to manual URL input if polling finds no URL.</p>
+                <p className="text-orange-400/70">Extracts the drop URL from trigger content and writes it to all assigned TaskGroups, then fires. Falls back to manual URL input if no URL is present.</p>
               </div>
             )}
             {retailerType === "pokemon_center" && (
@@ -1214,130 +977,13 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
             )}
           </div>
 
-          <div className="rounded-sm border border-gray-500/20 bg-gray-500/5 px-3 py-2.5 space-y-1.5">
-            <p className="text-[10px] font-mono text-gray-300 font-semibold">Bot token mode only</p>
-            <p className="text-[10px] font-mono text-gray-500">User Authorization token mode is temporarily disabled for account safety.</p>
+          <div className="rounded-sm border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5 text-[10px] font-mono text-cyan-300">
+            Discord discovery is now global and backend-managed. Add the task groups this monitor should fire, and set timing here only.
           </div>
 
           <div>
             <Label className="text-xs text-gray-400 font-mono">Retailer / Monitor Name *</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Walmart, PokemonCenter, Costco" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-          </div>
-
-          <div>
-            <Label className="text-xs text-gray-400 font-mono">Discord Bot Token *</Label>
-            <Input type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="Bot token from Developer Portal" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
-          </div>
-
-          {/* Channel Picker */}
-          <div className="space-y-2">
-            <Label className="text-xs text-gray-400 font-mono">Discord Channels *</Label>
-
-            {/* Step 1: Load servers */}
-            <button
-              onClick={loadGuilds}
-              disabled={loadingGuilds || !currentToken.trim()}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-sm border border-violet-500/30 bg-violet-500/10 text-violet-300 font-mono text-xs hover:bg-violet-500/20 disabled:opacity-40 transition-all"
-            >
-              {loadingGuilds
-                ? <><div className="w-3 h-3 border border-violet-400/40 border-t-violet-300 rounded-full animate-spin" /> Loading servers…</>
-                : <><Hash className="w-3.5 h-3.5" /> {guilds.length > 0 ? `Reload Servers (${guilds.length} loaded)` : "Load My Servers"}</>
-              }
-            </button>
-
-            {/* Step 2: Pick a server */}
-            {guilds.length > 0 && (
-              <div>
-                <Label className="text-[10px] text-gray-500 font-mono">Select Server</Label>
-                <Input
-                  value={guildSearch}
-                  onChange={(e) => setGuildSearch(e.target.value)}
-                  placeholder="Search servers..."
-                  className="bg-white/5 border-white/10 font-mono text-[11px] mt-1 h-7"
-                />
-                <div className="mt-0.5 max-h-48 overflow-y-auto border border-white/10 rounded-sm bg-[#1a1a24] space-y-px p-1">
-                  {guilds
-                    .filter((g) => g.name?.toLowerCase().includes(guildSearch.toLowerCase()))
-                    .map((g) => {
-                    const iconUrl = g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=32` : null;
-                    const initials = g.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
-                    return (
-                      <button
-                        key={g.id}
-                        onClick={() => loadChannels(g.id)}
-                        className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-sm text-left text-xs font-mono transition-colors ${selectedGuildId === g.id ? "bg-violet-500/25 text-violet-200" : "text-gray-300 hover:bg-white/5 hover:text-gray-100"}`}
-                      >
-                        {iconUrl ? (
-                          <img src={iconUrl} alt={g.name} className="w-5 h-5 rounded-full flex-shrink-0 object-cover" onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }} />
-                        ) : null}
-                        <span className={`w-5 h-5 rounded-full flex-shrink-0 bg-violet-700/60 items-center justify-center text-[9px] font-bold text-violet-200 ${iconUrl ? "hidden" : "flex"}`}>{initials}</span>
-                        <span className="flex-1 truncate">{g.name}</span>
-                        {selectedGuildId === g.id && <span className="text-[9px] text-violet-400">✓</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Step 3: Pick channels */}
-            {loadingChannels && (
-              <div className="flex items-center gap-2 text-[10px] font-mono text-gray-500 py-1">
-                <div className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin" /> Loading channels…
-              </div>
-            )}
-            {guildChannels.length > 0 && (
-              <div className="space-y-1.5">
-                <Input
-                  value={channelSearch}
-                  onChange={(e) => setChannelSearch(e.target.value)}
-                  placeholder="Search channels..."
-                  className="bg-white/5 border-white/10 font-mono text-[11px] h-7"
-                />
-                <div className="max-h-36 overflow-y-auto space-y-0.5 border border-white/5 rounded-sm p-1.5 bg-black/20">
-                  {guildChannels
-                    .filter((ch) => ch.name?.toLowerCase().includes(channelSearch.toLowerCase()))
-                    .map((ch) => {
-                  const isSelected = channels.some((c) => c.channel_id === ch.id);
-                  return (
-                    <button
-                      key={ch.id}
-                      onClick={() => toggleChannel(ch)}
-                      className={`w-full flex items-center gap-2 px-2 py-1 rounded-sm text-left text-[10px] font-mono transition-colors ${isSelected ? "bg-violet-500/20 text-violet-300" : "text-gray-400 hover:bg-white/5 hover:text-gray-200"}`}
-                    >
-                      <Hash className="w-3 h-3 flex-shrink-0" />
-                      <span className="flex-1 truncate">{ch.name}</span>
-                      {isSelected && <span className="text-[9px] text-violet-400">✓ added</span>}
-                    </button>
-                  );
-                })}
-                </div>
-              </div>
-            )}
-
-            {/* Selected channels with keyword inputs */}
-            {channels.length > 0 && (
-              <div className="space-y-1.5 mt-1">
-                <p className="text-[10px] font-mono text-gray-600 uppercase tracking-widest">{channels.length} channel{channels.length !== 1 ? "s" : ""} selected</p>
-                {channels.map((ch) => (
-                  <div key={ch.channel_id} className="flex items-center gap-2 px-2 py-1.5 bg-violet-500/5 border border-violet-500/10 rounded-sm">
-                    <Hash className="w-2.5 h-2.5 text-violet-400 flex-shrink-0" />
-                    <span className="text-[10px] font-mono text-gray-200 w-28 truncate flex-shrink-0">#{ch.label}</span>
-                    <Input
-                      value={ch.keyword || ""}
-                      onChange={(e) => updateChannelKeyword(ch.channel_id, e.target.value)}
-                      placeholder="keyword (blank=any)"
-                      className="bg-white/5 border-white/10 font-mono text-[10px] h-6 flex-1 min-w-0"
-                    />
-                    <button onClick={() => removeChannel(ch.channel_id)} className="text-gray-600 hover:text-red-400 flex-shrink-0"><X className="w-3 h-3" /></button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {guilds.length === 0 && (
-              <p className="text-[10px] font-mono text-gray-600">↑ Paste your token above, then click "Load My Servers" to browse and select channels.</p>
-            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -1361,7 +1007,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
                 ? <>Drop Groups <span className="text-gray-600">(URL auto-updated from Discord message; manual fallback available)</span></>
                 : retailerType === "pokemon_center"
                 ? <>Task Groups <span className="text-gray-600">(all fire instantly on keyword detection)</span></>
-                : <>Task Queue <span className="text-gray-600">(all fire when any channel triggers)</span></>
+                : <>Task Queue <span className="text-gray-600">(backend-managed global source)</span></>
               }
             </Label>
             {/* Retailer bundle quick-add */}
@@ -1423,7 +1069,7 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
           </div>
 
           <Button onClick={submit} disabled={loading || !canSubmit} className="w-full bg-violet-600 hover:bg-violet-700 font-mono text-xs">
-            {loading ? "Creating..." : `Create Monitor — ${channels.length} channel${channels.length !== 1 ? "s" : ""}`}
+            {loading ? "Creating..." : "Create Monitor"}
           </Button>
         </div>
       </DialogContent>
@@ -1497,20 +1143,9 @@ export default function DiscordMonitor() {
       db.DiscordMonitor.list("-created_date"),
       db.TaskGroup.list(),
     ]);
-    const normalized = Array.isArray(m)
-      ? m.map((monitor) => ({
-          ...monitor,
-          bot_mode: "bot_token",
-        }))
-      : [];
-    setMonitors(normalized);
+    setMonitors(Array.isArray(m) ? m : []);
     setTaskGroups(t);
     setLoading(false);
-
-    await Promise.all((Array.isArray(m) ? m : []).map((monitor) => {
-      if (monitor.bot_mode === "bot_token") return Promise.resolve();
-      return db.DiscordMonitor.update(monitor.id, { bot_mode: "bot_token" }).catch(() => {});
-    }));
   };
 
   useEffect(() => { load(); }, []);
@@ -1569,7 +1204,7 @@ export default function DiscordMonitor() {
             <div className="text-center py-16 border border-dashed border-white/5 rounded-sm">
               <Radio className="w-8 h-8 text-gray-700 mx-auto mb-3" />
               <p className="text-sm text-gray-500 font-mono">No monitors configured</p>
-              <p className="text-xs text-gray-700 font-mono mt-1">Create a monitor per retailer and add all the Discord channels to watch</p>
+              <p className="text-xs text-gray-700 font-mono mt-1">Create a monitor per retailer and attach task groups for backend global triggers</p>
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">

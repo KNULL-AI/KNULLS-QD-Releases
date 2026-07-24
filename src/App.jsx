@@ -1,5 +1,5 @@
 import { Toaster } from "react-hot-toast"
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { HashRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
@@ -22,10 +22,28 @@ import toast from 'react-hot-toast';
 import { onImapPollEvent, offImapPollEvent } from '@/lib/electronBridge';
 import { db } from '@/lib/db';
 import { connectTriggerBus } from '@/lib/triggerBus';
-import { runTaskGroup } from '@/lib/taskGroupLauncher';
+import { prewarmTaskLaunchPath, runTaskGroup } from '@/lib/taskGroupLauncher';
 
 function AppContent() {
   const { isAuthenticated, authSession, getValidAccessToken } = useAuth();
+  const taskGroupsByRetailerRef = useRef(new Map());
+
+  const indexTaskGroups = (groups) => {
+    const next = new Map();
+    for (const group of Array.isArray(groups) ? groups : []) {
+      const retailer = String(group?.retailer || '').toLowerCase();
+      if (!retailer) continue;
+      if (!next.has(retailer)) next.set(retailer, []);
+      next.get(retailer).push(group);
+    }
+    taskGroupsByRetailerRef.current = next;
+    return next;
+  };
+
+  const refreshTaskGroupIndex = async () => {
+    const groups = await db.TaskGroup.list();
+    return indexTaskGroups(groups);
+  };
 
   // Global IMAP poll listener — persists across page navigation and routes
   // so the user sees real-time verification code updates no matter which page they're on
@@ -54,9 +72,19 @@ function AppContent() {
   useEffect(() => {
     let stopBus = null;
     let cancelled = false;
+    let stopTaskGroupSub = null;
 
     const startBus = async () => {
       if (!isAuthenticated) return;
+
+      await Promise.allSettled([
+        prewarmTaskLaunchPath(),
+        refreshTaskGroupIndex(),
+      ]);
+
+      stopTaskGroupSub = db.TaskGroup.subscribe(() => {
+        refreshTaskGroupIndex().catch(() => {});
+      });
 
       const wsUrl = authSession?.ws_url || import.meta.env.VITE_TRIGGER_WS_URL || '';
       if (!wsUrl) return;
@@ -82,8 +110,11 @@ function AppContent() {
             return;
           }
 
-          const groups = await db.TaskGroup.list();
-          const matching = groups.filter((group) => String(group?.retailer || '').toLowerCase() === retailer);
+          let matching = taskGroupsByRetailerRef.current.get(retailer) || [];
+          if (!matching.length) {
+            const indexed = await refreshTaskGroupIndex();
+            matching = indexed.get(retailer) || [];
+          }
           if (!matching.length) {
             ack('ignored', `No local task groups for ${retailer}`);
             return;
@@ -95,6 +126,7 @@ function AppContent() {
             if (event.url && (retailer === 'walmart' || retailer === 'costco')) {
               await db.TaskGroup.update(group.id, { target_url: event.url });
               nextGroup = { ...group, target_url: event.url };
+              group.target_url = event.url;
             }
             launchedCount += await runTaskGroup(nextGroup);
           }
@@ -109,6 +141,7 @@ function AppContent() {
 
     return () => {
       cancelled = true;
+      if (stopTaskGroupSub) stopTaskGroupSub();
       if (stopBus) stopBus();
     };
   }, [isAuthenticated, authSession?.ws_url, getValidAccessToken]);

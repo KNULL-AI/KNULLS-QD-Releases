@@ -33,7 +33,7 @@ export default function AddProxyDialog({ onAdded }) {
   const [bulkGroupId, setBulkGroupId] = useState("none");
   const [bulkNewGroupName, setBulkNewGroupName] = useState("");
   const [bulkProtocol, setBulkProtocol] = useState("auto");
-  const fileRef = useRef();
+  const fileRef = useRef(null);
 
   useEffect(() => {
     if (open) db.ProxyGroup.list().then(setProxyGroups);
@@ -63,7 +63,10 @@ export default function AddProxyDialog({ onAdded }) {
 
   const handleFileLoad = (file) => {
     const reader = new FileReader();
-    reader.onload = (e) => setBulkText((prev) => prev ? prev + "\n" + e.target.result : e.target.result);
+    reader.onload = (e) => {
+      const text = typeof e?.target?.result === "string" ? e.target.result : "";
+      setBulkText((prev) => prev ? `${prev}\n${text}` : text);
+    };
     reader.readAsText(file);
   };
 
@@ -202,7 +205,7 @@ export default function AddProxyDialog({ onAdded }) {
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
               onDrop={handleDrop}
-              onClick={() => fileRef.current?.click()}
+              onClick={() => { if (fileRef.current) fileRef.current.click(); }}
               className={`flex flex-col items-center justify-center gap-2 py-4 rounded border-2 border-dashed cursor-pointer transition-colors ${dragging ? "border-emerald-500/60 bg-emerald-500/10" : "border-white/10 hover:border-white/20 bg-white/[0.02]"}`}
             >
               <Upload className="w-4 h-4 text-gray-500" />

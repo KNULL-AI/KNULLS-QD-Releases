@@ -38,6 +38,31 @@ export default defineConfig({
   build: {
     sourcemap: false,
     minify: 'esbuild',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+
+          if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
+            return 'vendor-core';
+          }
+
+          if (id.includes('@radix-ui') || id.includes('lucide-react')) {
+            return 'vendor-ui';
+          }
+
+          if (id.includes('@tanstack/react-query') || id.includes('zod') || id.includes('lodash')) {
+            return 'vendor-data';
+          }
+
+          if (id.includes('recharts') || id.includes('framer-motion') || id.includes('three')) {
+            return 'vendor-visual';
+          }
+
+          return 'vendor-core';
+        },
+      },
+    },
   },
   resolve: {
     alias: {

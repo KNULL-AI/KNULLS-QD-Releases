@@ -12,11 +12,14 @@ export default function AddProxyToGroupDialog({ group, onAdded }) {
   const [loading, setLoading] = useState(false);
   const [bulkText, setBulkText] = useState("");
   const [dragging, setDragging] = useState(false);
-  const fileRef = useRef();
+  const fileRef = useRef(null);
 
   const handleFileLoad = (file) => {
     const reader = new FileReader();
-    reader.onload = (e) => setBulkText((prev) => prev ? prev + "\n" + e.target.result : e.target.result);
+    reader.onload = (e) => {
+      const text = typeof e?.target?.result === "string" ? e.target.result : "";
+      setBulkText((prev) => prev ? `${prev}\n${text}` : text);
+    };
     reader.readAsText(file);
   };
 
@@ -90,7 +93,7 @@ export default function AddProxyToGroupDialog({ group, onAdded }) {
             onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
             onDrop={handleDrop}
-            onClick={() => fileRef.current?.click()}
+            onClick={() => { if (fileRef.current) fileRef.current.click(); }}
             className={`flex flex-col items-center justify-center gap-2 py-4 rounded border-2 border-dashed cursor-pointer transition-colors ${dragging ? "border-emerald-500/60 bg-emerald-500/10" : "border-white/10 hover:border-white/20 bg-white/[0.02]"}`}
           >
             <Upload className="w-4 h-4 text-gray-500" />

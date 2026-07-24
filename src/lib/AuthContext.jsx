@@ -7,16 +7,13 @@ const DEFAULT_WS_URL = import.meta.env.VITE_TRIGGER_WS_URL || '';
 const ALLOW_LOCAL_MOCK = String(import.meta.env.VITE_ALLOW_LOCAL_ACTIVATION || '').toLowerCase() === 'true';
 const FORCE_ACTIVATION = String(import.meta.env.VITE_FORCE_ACTIVATION || '').toLowerCase() === 'true';
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
-  const [isLoadingPublicSettings, setIsLoadingPublicSettings] = useState(true);
   const [authError, setAuthError] = useState(null);
-  const [authChecked, setAuthChecked] = useState(false);
-  const [appPublicSettings, setAppPublicSettings] = useState(null); // Contains only { id, public_settings }
   const [authSession, setAuthSession] = useState(null);
 
   const saveSession = (session) => {
@@ -62,8 +59,6 @@ export const AuthProvider = ({ children }) => {
       setUser(null);
       setIsAuthenticated(false);
       setIsLoadingAuth(false);
-      setIsLoadingPublicSettings(false);
-      setAuthChecked(true);
       return;
     }
 
@@ -78,12 +73,6 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(false);
     }
     setIsLoadingAuth(false);
-    setIsLoadingPublicSettings(false);
-    setAuthChecked(true);
-  };
-
-  const checkUserAuth = async () => {
-    await checkAppState();
   };
 
   const activateWithKey = async (key) => {
@@ -203,26 +192,14 @@ export const AuthProvider = ({ children }) => {
     saveSession(null);
   };
 
-  const navigateToLogin = () => {
-    if (typeof window !== 'undefined') {
-      window.location.hash = '#/activate';
-    }
-  };
-
   return (
     <AuthContext.Provider value={{ 
       user, 
       isAuthenticated, 
       isLoadingAuth,
-      isLoadingPublicSettings,
       authError,
-      appPublicSettings,
-      authChecked,
       authSession,
       logout,
-      navigateToLogin,
-      checkUserAuth,
-      checkAppState,
       activateWithKey,
       refreshSession,
       getValidAccessToken,

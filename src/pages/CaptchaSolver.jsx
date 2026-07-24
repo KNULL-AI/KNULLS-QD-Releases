@@ -274,7 +274,7 @@ function PollTierPanel({ config, onSaved }) {
 }
 
 // ── Solver Test Panel ─────────────────────────────────────────────────────────
-function SolverPanel() {
+function SolverPanel({ config: _config }) {
   const DATASET_KEY = "knull-test-captcha-dataset-v1";
   const [difficulty, setDifficulty] = useState("medium");
   const [challenge, setChallenge] = useState(null);

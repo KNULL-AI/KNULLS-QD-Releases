@@ -32,10 +32,10 @@ async function importConfig(file) {
   const config = JSON.parse(text);
   if (!config.version) throw new Error("Invalid config file");
   const counts = { taskGroups: 0, proxyGroups: 0, discordMonitors: 0, sessionProfiles: 0 };
-  if (config.taskGroups?.length) for (const tg of config.taskGroups) { const { id, created_date, updated_date, created_by_id, ...rest } = tg; await db.TaskGroup.create(rest); counts.taskGroups++; }
-  if (config.proxyGroups?.length) for (const pg of config.proxyGroups) { const { id, created_date, updated_date, created_by_id, ...rest } = pg; await db.ProxyGroup.create(rest); counts.proxyGroups++; }
-  if (config.discordMonitors?.length) for (const dm of config.discordMonitors) { const { id, created_date, updated_date, created_by_id, ...rest } = dm; await db.DiscordMonitor.create({ ...rest, is_active: false }); counts.discordMonitors++; }
-  if (config.sessionProfiles?.length) for (const sp of config.sessionProfiles) { const { id, created_date, updated_date, created_by_id, ...rest } = sp; await db.SessionProfile.create(rest); counts.sessionProfiles++; }
+  if (config.taskGroups?.length) for (const tg of config.taskGroups) { const { id: _id, created_date: _createdDate, updated_date: _updatedDate, created_by_id: _createdById, ...rest } = tg; await db.TaskGroup.create(rest); counts.taskGroups++; }
+  if (config.proxyGroups?.length) for (const pg of config.proxyGroups) { const { id: _id, created_date: _createdDate, updated_date: _updatedDate, created_by_id: _createdById, ...rest } = pg; await db.ProxyGroup.create(rest); counts.proxyGroups++; }
+  if (config.discordMonitors?.length) for (const dm of config.discordMonitors) { const { id: _id, created_date: _createdDate, updated_date: _updatedDate, created_by_id: _createdById, ...rest } = dm; await db.DiscordMonitor.create({ ...rest, is_active: false }); counts.discordMonitors++; }
+  if (config.sessionProfiles?.length) for (const sp of config.sessionProfiles) { const { id: _id, created_date: _createdDate, updated_date: _updatedDate, created_by_id: _createdById, ...rest } = sp; await db.SessionProfile.create(rest); counts.sessionProfiles++; }
   return counts;
 }
 

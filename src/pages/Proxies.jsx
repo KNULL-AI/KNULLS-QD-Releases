@@ -32,7 +32,7 @@ export default function Proxies() {
     try {
       const data = await db.Proxy.list("-created_date", 200);
       setProxies(data);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load proxies");
     }
     setLoading(false);

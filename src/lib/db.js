@@ -231,6 +231,5 @@ export const db = {
   WalmartAccount:  makeCollection("WalmartAccount"),
   ImapConfig:      makeCollection("ImapConfig"),
   VerificationCode:makeCollection("VerificationCode"),
-  WalmartDrop:     makeCollection("WalmartDrop"),
   CaptchaConfig:   makeCollection("CaptchaConfig"),
 };

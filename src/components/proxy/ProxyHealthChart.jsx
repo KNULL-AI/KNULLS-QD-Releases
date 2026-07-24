@@ -30,7 +30,8 @@ export default function ProxyHealthChart({ proxies }) {
   const total = proxies.length;
   const successRate = total > 0 ? Math.round((healthy / (healthy + unhealthy || 1)) * 100) : 0;
 
-  const CustomTooltip = ({ active, payload }) => {
+  const CustomTooltip = (props) => {
+    const { active, payload } = props || {};
     if (!active || !payload?.length) return null;
     const d = payload[0]?.payload;
     return (
