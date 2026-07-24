@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.8 - 2026-07-24
+
+### Highlights
+- Added updater reliability hardening so downloaded updates continue prompting after restart until installed.
+- Added one-click `Check for Updates` action in Settings for support and user self-diagnostics.
+- Continued solve-path performance tuning to reduce latency in captcha assignment, event handling, and OTP autofill loops.
+
+### User-Facing Improvements
+- Settings now shows installed app version from Electron runtime (`app.getVersion`) with packaged/dev indicator.
+- If an update is already downloaded, manual update checks immediately surface the install prompt.
+- Added optional captcha performance telemetry panel and rolling p50/p95 metrics for faster provider diagnostics.
+
+### Stability and Behavior
+- Added persistent pending-update state tracking in main process to avoid missed install prompts.
+- Added manual updater IPC bridge across main/preload/renderer for deterministic update checks.
+- Reduced synchronous work on hot captcha flows and optimized repeated DOM scan patterns in session preload.
+
 ## 1.0.7 - 2026-07-24
 
 ### Highlights

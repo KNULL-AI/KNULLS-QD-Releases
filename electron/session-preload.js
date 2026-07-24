@@ -285,6 +285,9 @@ let _lastSolvedKey = "";  // siteKey+pathname combo
 let _lastSolvedTs = 0;    // timestamp of last successful solve
 let _lastDetectedKey = "";
 let _lastDetectedTs = 0;
+let _cachedV3Href = "";
+let _cachedV3SiteKey = "";
+let _lastV3ScanTs = 0;
 
 function emitCaptchaEvent(eventType, info = {}, extra = {}) {
   try {
@@ -312,13 +315,29 @@ function detectCaptcha() {
     }
   }
 
-  // reCAPTCHA v3 — render= param in script src
-  for (const s of document.querySelectorAll("script[src]")) {
-    if (s.src.includes("recaptcha") && s.src.includes("render=")) {
-      const m = s.src.match(/render=([^&]+)/);
-      if (m && m[1] !== "explicit") return { type: "recaptchav3", siteKey: m[1], pageUrl: url };
+  // reCAPTCHA v3 — render= param in script src.
+  // Scan at most once per second per URL to avoid repeated full script walks.
+  if (url !== _cachedV3Href) {
+    _cachedV3Href = url;
+    _cachedV3SiteKey = "";
+    _lastV3ScanTs = 0;
+  }
+
+  const now = Date.now();
+  if (!_cachedV3SiteKey && now - _lastV3ScanTs > 1000) {
+    _lastV3ScanTs = now;
+    for (const s of document.querySelectorAll("script[src]")) {
+      if (s.src.includes("recaptcha") && s.src.includes("render=")) {
+        const m = s.src.match(/render=([^&]+)/);
+        if (m && m[1] !== "explicit") {
+          _cachedV3SiteKey = m[1];
+          break;
+        }
+      }
     }
   }
+
+  if (_cachedV3SiteKey) return { type: "recaptchav3", siteKey: _cachedV3SiteKey, pageUrl: url };
 
   // hCaptcha
   const hcap = document.querySelector(".h-captcha[data-sitekey], [data-hcaptcha-sitekey]");
@@ -519,6 +538,34 @@ ipcRenderer.on("inject-verification-code", (_e, payload) => {
   }
   function visible(el) { return el.offsetParent !== null || el.getClientRects().length > 0; }
 
+  function findVisibleInputByPredicate(predicate) {
+    const inputs = document.querySelectorAll("input");
+    for (const el of inputs) {
+      if (!visible(el)) continue;
+      if (predicate(el)) return el;
+    }
+    return null;
+  }
+
+  function findVisibleButtonByText(textMatcher, root = document) {
+    const buttons = root.querySelectorAll('button[type="submit"], button');
+    for (const button of buttons) {
+      if (!visible(button) || button.disabled) continue;
+      const txt = (button.textContent || "").trim().replace(/\s+/g, " ").toLowerCase();
+      if (textMatcher(txt)) return button;
+    }
+    return null;
+  }
+
+  function listVisibleInputs() {
+    const inputs = [];
+    const nodes = document.querySelectorAll("input");
+    for (const el of nodes) {
+      if (visible(el)) inputs.push(el);
+    }
+    return inputs;
+  }
+
   // Some Walmart flows ask for password again after OTP submission.
   // Retry for a short window and submit automatically when that prompt appears.
   function handlePostCodePasswordChallenge(password) {
@@ -527,16 +574,12 @@ ipcRenderer.on("inject-verification-code", (_e, payload) => {
     const maxMs = 30000;
 
     const tryFill = () => {
-      const pw = Array.from(document.querySelectorAll('input[type="password"]')).find((el) => visible(el));
+      const pw = findVisibleInputByPredicate((el) => el.type === "password");
       if (pw) {
         fillInput(pw, String(password));
         pw.focus();
         setTimeout(() => {
-          const btn = Array.from(document.querySelectorAll('button[type="submit"], button')).find((b) => {
-            if (!visible(b) || b.disabled) return false;
-            const t = (b.textContent || "").trim().toLowerCase();
-            return t === "continue" || t === "sign in" || t.includes("continue");
-          });
+          const btn = findVisibleButtonByText((t) => t === "continue" || t === "sign in" || t.includes("continue"));
           if (btn) btn.click();
         }, 300);
         return;
@@ -553,9 +596,7 @@ ipcRenderer.on("inject-verification-code", (_e, payload) => {
   function submitVerification() {
     const started = Date.now();
     const trySubmit = () => {
-      const signIn = Array.from(document.querySelectorAll('button[type="submit"], button')).find((button) =>
-        visible(button) && !button.disabled && button.textContent.trim().replace(/\s+/g, " ").toLowerCase() === "sign in"
-      );
+      const signIn = findVisibleButtonByText((t) => t === "sign in");
       if (signIn) {
         signIn.click();
         handlePostCodePasswordChallenge(fallbackPassword);
@@ -566,11 +607,10 @@ ipcRenderer.on("inject-verification-code", (_e, payload) => {
     setTimeout(trySubmit, 250);
   }
   const textTypes = ["text", "tel", "number", ""];
+  const visibleInputs = listVisibleInputs();
 
   // 1) Per-digit OTP boxes (maxlength=1) — distribute one char each
-  const singles = Array.from(document.querySelectorAll("input")).filter(
-    (el) => el.getAttribute("maxlength") === "1" && (el.type || "text") && visible(el)
-  );
+  const singles = visibleInputs.filter((el) => el.getAttribute("maxlength") === "1" && (el.type || "text"));
   if (singles.length >= String(code).length) {
     for (let i = 0; i < String(code).length; i++) fillInput(singles[i], String(code)[i]);
     submitVerification();
@@ -578,8 +618,7 @@ ipcRenderer.on("inject-verification-code", (_e, payload) => {
   }
 
   // 2) A single OTP-style input that looks like a code field
-  const labelled = Array.from(document.querySelectorAll("input")).filter((el) => {
-    if (!visible(el)) return false;
+  const labelled = visibleInputs.filter((el) => {
     const t = (el.type || "text").toLowerCase();
     if (!textTypes.includes(t)) return false;
     const sig = ((el.name || "") + " " + (el.id || "") + " " + (el.placeholder || "") + " " + (el.getAttribute("autocomplete") || "")).toLowerCase();
@@ -588,9 +627,7 @@ ipcRenderer.on("inject-verification-code", (_e, payload) => {
   if (labelled.length) { fillInput(labelled[0], String(code)); submitVerification(); return; }
 
   // 3) Any empty visible text/tel/number input
-  const any = Array.from(document.querySelectorAll("input")).filter(
-    (el) => visible(el) && !el.value && textTypes.includes((el.type || "text").toLowerCase())
-  );
+  const any = visibleInputs.filter((el) => !el.value && textTypes.includes((el.type || "text").toLowerCase()));
   if (any.length) { fillInput(any[0], String(code)); submitVerification(); }
 
   handlePostCodePasswordChallenge(fallbackPassword);
