@@ -1368,6 +1368,7 @@ function createWindow() {
   mainWindow = win;
   let mainUiLoaded = false;
   let mainUiRetried = false;
+  let startupCacheHealAttempted = false;
 
   const logMainUiIssue = (message, details = "") => {
     const full = details ? `${message} — ${details}` : message;
@@ -1382,6 +1383,34 @@ function createWindow() {
     }
   };
 
+  const tryStartupCacheHeal = () => {
+    if (startupCacheHealAttempted) return false;
+    startupCacheHealAttempted = true;
+
+    try {
+      const userData = app.getPath("userData");
+      const gpuCachePaths = [
+        path.join(userData, "GPUCache"),
+        path.join(userData, "DawnGraphiteCache"),
+        path.join(userData, "DawnWebGPUCache"),
+      ];
+
+      let cleared = 0;
+      for (const p of gpuCachePaths) {
+        if (fs.existsSync(p)) {
+          fs.rmSync(p, { recursive: true, force: true });
+          cleared += 1;
+        }
+      }
+
+      logMainUiIssue("Startup cache self-heal executed", `cleared=${cleared}`);
+      return true;
+    } catch (e) {
+      logMainUiIssue("Startup cache self-heal failed", e?.message || String(e));
+      return false;
+    }
+  };
+
   win.webContents.once("did-finish-load", () => {
     mainUiLoaded = true;
   });
@@ -1389,6 +1418,11 @@ function createWindow() {
   win.webContents.on("did-fail-load", (_e, errorCode, errorDescription, validatedURL) => {
     if (errorCode === -3) return; // aborted navigation
     logMainUiIssue("Main UI failed to load", `[${errorCode}] ${errorDescription} url=${validatedURL || "n/a"}`);
+
+    if (!mainUiLoaded && !mainUiRetried && tryStartupCacheHeal()) {
+      mainUiRetried = true;
+      try { win.reload(); } catch (_) {}
+    }
   });
 
   win.webContents.on("render-process-gone", (_e, details) => {
@@ -1400,6 +1434,7 @@ function createWindow() {
     if (!win.isDestroyed() && !mainUiLoaded && !mainUiRetried) {
       mainUiRetried = true;
       logMainUiIssue("Main UI did not finish loading within timeout", "retrying once");
+      tryStartupCacheHeal();
       try { win.reload(); } catch (_) {}
     }
   }, 15000);
