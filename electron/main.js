@@ -28,8 +28,8 @@ const http = require("http");
 const https = require("https");
 const { URL } = require("url");
 
-// Persistent keep-alive agents for AYCD polling — reuse TCP connections instead of
-// opening a new socket per poll call (critical at 100 concurrent solve tasks)
+// Persistent keep-alive agents for API calls — reuse TCP connections instead of
+// opening a new socket per request under load.
 const _httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, keepAliveMsecs: 10000 });
 const _httpAgent  = new http.Agent({  keepAlive: true, maxSockets: 32, keepAliveMsecs: 10000 });
 
@@ -55,7 +55,7 @@ function getDb() {
 function initSchema(db) {
   const tables = [
     "Proxy", "ProxyGroup", "BrowserSession", "TaskGroup",
-    "DiscordMonitor", "AYCDConfig", "SystemLog", "SessionProfile", "ActivityEvent",
+    "DiscordMonitor", "SystemLog", "SessionProfile", "ActivityEvent",
     "WalmartAccount", "ImapConfig", "VerificationCode",
     "WalmartDrop", "CaptchaConfig", "DiscordVerify"
   ];
@@ -141,7 +141,6 @@ ipcMain.handle("db:create", (_e, { table, data }) => {
 });
 
 ipcMain.handle("db:update", (_e, { table, id, data }) => {
-  if (table === "AYCDConfig") { _aycdCredCache = null; _aycdCredCacheTs = 0; }
   const db = getDb(); if (!db) return null;
   const existing = rowToRecord(db.prepare(`SELECT * FROM "${table}" WHERE id = ?`).get(id));
   if (!existing) return null;
@@ -814,155 +813,6 @@ ipcMain.handle("check-proxy", async (_event, proxy) => {
   });
 });
 
-// ── AYCD base URL ─────────────────────────────────────────────────────────────
-const AYCD_BASE = "https://api.aycd.io/autosolve/v2";
-
-// ── IPC: AYCD AutoSolve — automatic per-session captcha solving ──────────────
-// Credentials cached in memory after first load — no per-solve DB hit.
-let _aycdCredCache = null;
-let _aycdCredCacheTs = 0;
-
-// poll_tier → interval in ms: low=1-10 instances, medium=10-50, high=50-100
-const POLL_TIER_MS = { low: 800, medium: 1200, high: 1800 };
-
-function getAycdCreds() {
-  // Re-read from DB at most every 30s in case user updated them
-  if (_aycdCredCache && Date.now() - _aycdCredCacheTs < 30000) return _aycdCredCache;
-  const db = getDb();
-  if (!db) return null;
-  const configs = db.prepare(`SELECT * FROM "AYCDConfig"`).all().map(rowToRecord);
-  const config = configs[0];
-  if (!config?.api_key || !config?.access_token) return null;
-  _aycdCredCache = {
-    apiKey: config.api_key,
-    accessToken: config.access_token,
-    pollMs: POLL_TIER_MS[config.poll_tier] ?? 1200,
-  };
-  _aycdCredCacheTs = Date.now();
-  return _aycdCredCache;
-}
-
-const CAPTCHA_TYPE_MAP = { recaptchav2: "recaptcha-v2", recaptchav3: "recaptcha-v3", hcaptcha: "hcaptcha" };
-
-// Concurrency cap — prevents hammering AYCD at 100 simultaneous instances.
-// Submit tasks immediately but share a single polling loop across all in-flight solves.
-const _aycdInFlight = new Map(); // taskId → { resolve, reject, headers }
-let _aycdPolling = false;
-
-async function _aycdPollLoop() {
-  if (_aycdPolling) return;
-  _aycdPolling = true;
-  while (_aycdInFlight.size > 0) {
-    const creds = getAycdCreds();
-    const interval = creds?.pollMs ?? 1200;
-    await new Promise((r) => setTimeout(r, interval));
-    // Poll all in-flight tasks in parallel — one batch per tick
-    const entries = [..._aycdInFlight.entries()];
-    await Promise.allSettled(entries.map(async ([taskId, { resolve, headers }]) => {
-      try {
-        const pollRes = await nodeFetch(`${AYCD_BASE}/token/${taskId}`, { method: "GET", headers, timeoutMs: 8000 });
-        const pollData = await pollRes.json();
-        const token = pollData.token || pollData.solution;
-        if (token) {
-          _aycdInFlight.delete(taskId);
-          resolve({ token });
-        } else if (pollData.error) {
-          _aycdInFlight.delete(taskId);
-          resolve({ error: pollData.error });
-        }
-      } catch (_) {
-        // transient network error — will retry next tick
-      }
-    }));
-  }
-  _aycdPolling = false;
-}
-
-ipcMain.handle("aycd-autosolve", async (_event, { type, siteKey, pageUrl }) => {
-  try {
-    const creds = getAycdCreds();
-    if (!creds) return { error: "No AYCD credentials — add them in the Captcha Solver page" };
-
-    const headers = {
-      "api-key": creds.apiKey,
-      "access-token": creds.accessToken,
-      "Content-Type": "application/json",
-    };
-    const captchaType = CAPTCHA_TYPE_MAP[type] || "recaptcha-v2";
-
-    // Submit task — one HTTP call per solve, fast
-    const submitRes = await nodeFetch(`${AYCD_BASE}/token`, {
-      method: "POST",
-      headers,
-      timeoutMs: 10000,
-      body: JSON.stringify({ "site-key": siteKey, "page-url": pageUrl, "captcha-type": captchaType }),
-    });
-    const submitData = await submitRes.json();
-    if (!submitRes.ok) return { error: submitData.message || `AYCD submit error ${submitRes.status}` };
-
-    const taskId = submitData.taskId || submitData.task_id || submitData.id;
-    if (!taskId) return { error: "AYCD did not return a task ID" };
-
-    // Register in shared poll loop — all 100 tasks polled together, not each with own loop
-    return await new Promise((resolve) => {
-      // Auto-timeout after 120s regardless
-      const timeout = setTimeout(() => {
-        _aycdInFlight.delete(taskId);
-        resolve({ error: "Timed out waiting for AYCD solution (120s)" });
-      }, 120000);
-
-      _aycdInFlight.set(taskId, {
-        headers,
-        resolve: (result) => { clearTimeout(timeout); resolve(result); },
-      });
-
-      // Kick off poll loop if not already running
-      _aycdPollLoop();
-    });
-  } catch (e) {
-    return { error: e.message };
-  }
-});
-
-// ── IPC: AYCD AutoSolve API ───────────────────────────────────────────────────
-
-ipcMain.handle("aycd-call", async (_event, { action, apiKey, accessToken, siteKey, pageUrl, captchaType, taskId }) => {
-  try {
-    const headers = {
-      "api-key": apiKey,
-      "access-token": accessToken,
-      "Content-Type": "application/json",
-    };
-
-    if (action === "test") {
-      const res = await nodeFetch(`${AYCD_BASE}/token`, { method: "GET", headers });
-      return { ok: res.ok || res.status === 404, status: res.status };
-    }
-
-    if (action === "submit") {
-      const res = await nodeFetch(`${AYCD_BASE}/token`, {
-        method: "POST",
-        headers,
-        timeoutMs: 10000,
-        body: JSON.stringify({ "site-key": siteKey, "page-url": pageUrl, "captcha-type": captchaType }),
-      });
-      const data = await res.json();
-      if (!res.ok) return { error: data.message || `Error ${res.status}` };
-      return data;
-    }
-
-    if (action === "poll") {
-      const res = await nodeFetch(`${AYCD_BASE}/token/${taskId}`, { method: "GET", headers });
-      const data = await res.json();
-      return data;
-    }
-
-    return { error: "Unknown action" };
-  } catch (e) {
-    return { error: e.message };
-  }
-});
-
 // ── Helper: Node.js fetch (works in Electron's Node runtime) ──────────────────
 function nodeFetch(url, options = {}) {
   return new Promise((resolve, reject) => {
@@ -1027,6 +877,15 @@ ipcMain.handle("inject-verification-code", (_event, { sessionId, code }) => {
   return { ok: true };
 });
 
+// ── IPC: push captcha token into an open session window ──────────────────────
+ipcMain.handle("inject-captcha-token", (_event, { sessionId, type, token }) => {
+  const win = browserWindows.get(sessionId);
+  if (!win || win.isDestroyed()) return { ok: false, error: "No open session for captcha token injection" };
+  if (!token) return { ok: false, error: "Missing captcha token" };
+  win.webContents.send("inject-captcha-token", { type, token });
+  return { ok: true };
+});
+
 // ── IPC: kill a browser session ───────────────────────────────────────────────
 ipcMain.handle("kill-browser", (_event, sessionId) => {
   const win = browserWindows.get(sessionId);
@@ -1075,6 +934,23 @@ ipcMain.on("queue-wait-detected", (_event, payload) => {
   }
 
   startQueueTimerInternal(sessionId, Math.floor(remainingMs), "down");
+});
+
+// Session windows report captcha lifecycle events so renderer can open
+// on-demand harvester popups and reflect real-time solving status.
+ipcMain.on("captcha-event", (_event, payload) => {
+  const sessionId = getSessionIdByWebContents(_event.sender);
+  if (!sessionId || !mainWindow || mainWindow.isDestroyed()) return;
+
+  mainWindow.webContents.send("captcha-event", {
+    sessionId,
+    eventType: payload?.eventType || "detected",
+    type: payload?.type || null,
+    siteKey: payload?.siteKey || null,
+    pageUrl: payload?.pageUrl || null,
+    error: payload?.error || null,
+    at: payload?.at || new Date().toISOString(),
+  });
 });
 
 // ── IMAP background polling ─────────────────────────────────────────────────

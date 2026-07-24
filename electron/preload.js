@@ -25,8 +25,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   checkProxy: (proxy) => ipcRenderer.invoke("check-proxy", proxy),
     diagnoseProxy: (proxy, url) => ipcRenderer.invoke("diagnose-proxy", { proxy, url }),
 
-  // AYCD AutoSolve — all API calls go through main process (credentials never in renderer)
-  aycdCall: (params) => ipcRenderer.invoke("aycd-call", params),
+  // Captcha token injection into task windows
+  injectCaptchaToken: (params) => ipcRenderer.invoke("inject-captcha-token", params),
 
   // Discord webhook — POST from main process so webhook URLs stay out of the renderer
   sendDiscordWebhook: (url, content) => ipcRenderer.invoke("send-discord-webhook", { url, content }),
@@ -55,6 +55,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Session launch diagnostics — main notifies renderer when browser windows are spawned
   onSessionLaunched: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-launched", wrapper); return wrapper; },
   offSessionLaunched: (wrapper) => ipcRenderer.removeListener("session-launched", wrapper),
+
+  // Captcha lifecycle diagnostics — detected/solved/error from task windows
+  onCaptchaEvent: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("captcha-event", wrapper); return wrapper; },
+  offCaptchaEvent: (wrapper) => ipcRenderer.removeListener("captcha-event", wrapper),
 
   // Tray: notified when tray kills all sessions
   onAllSessionsKilled: (cb) => { const wrapper = (_e) => cb(); ipcRenderer.on("all-sessions-killed", wrapper); return wrapper; },

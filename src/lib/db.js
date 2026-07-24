@@ -224,7 +224,6 @@ export const db = {
   BrowserSession: makeCollection("BrowserSession"),
   TaskGroup:      makeCollection("TaskGroup"),
   DiscordMonitor: makeCollection("DiscordMonitor"),
-  AYCDConfig:     makeCollection("AYCDConfig"),
   SystemLog:      makeCollection("SystemLog"),
   SessionProfile: makeCollection("SessionProfile"),
   ActivityEvent:  makeCollection("ActivityEvent"),
