@@ -1366,6 +1366,43 @@ function createWindow() {
   });
 
   mainWindow = win;
+  let mainUiLoaded = false;
+  let mainUiRetried = false;
+
+  const logMainUiIssue = (message, details = "") => {
+    const full = details ? `${message} — ${details}` : message;
+    console.error("[knull-main-ui]", full);
+    const db = getDb();
+    if (db) {
+      const now = new Date().toISOString();
+      db.prepare(`INSERT INTO "SystemLog" (id, created_date, updated_date, data) VALUES (?, ?, ?, ?)`).run(
+        newId(), now, now,
+        JSON.stringify({ level: "error", source: "MainWindow", message, details: String(details || "") })
+      );
+    }
+  };
+
+  win.webContents.once("did-finish-load", () => {
+    mainUiLoaded = true;
+  });
+
+  win.webContents.on("did-fail-load", (_e, errorCode, errorDescription, validatedURL) => {
+    if (errorCode === -3) return; // aborted navigation
+    logMainUiIssue("Main UI failed to load", `[${errorCode}] ${errorDescription} url=${validatedURL || "n/a"}`);
+  });
+
+  win.webContents.on("render-process-gone", (_e, details) => {
+    logMainUiIssue("Main renderer process exited", `reason=${details?.reason || "unknown"} code=${details?.exitCode ?? "n/a"}`);
+  });
+
+  // Rare startup race/recovery: if UI never paints after launch, retry once.
+  setTimeout(() => {
+    if (!win.isDestroyed() && !mainUiLoaded && !mainUiRetried) {
+      mainUiRetried = true;
+      logMainUiIssue("Main UI did not finish loading within timeout", "retrying once");
+      try { win.reload(); } catch (_) {}
+    }
+  }, 15000);
 
   if (process.env.NODE_ENV === "development") {
     win.loadURL("http://localhost:5173"); // Vite dev server
