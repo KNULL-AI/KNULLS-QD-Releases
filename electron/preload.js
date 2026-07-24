@@ -71,11 +71,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Cloudflare Worker activation requests (bypasses CORS)
   cfRequest: (params) => ipcRenderer.invoke("cf-request", params),
   getDeviceId: () => ipcRenderer.invoke("get-device-id"),
+  getAppVersion: () => ipcRenderer.invoke("get-app-version"),
 
   // Discord OAuth2 SSO — opens popup, intercepts redirect, returns user info
   discordOAuthLogin: (cfEndpoint) => ipcRenderer.invoke("discord-oauth-login", { cfEndpoint }),
 
   // Window controls
+  checkForUpdatesManual: () => ipcRenderer.invoke("check-for-updates-manual"),
   windowMinimize: () => ipcRenderer.invoke("window-minimize"),
   windowMaximize: () => ipcRenderer.invoke("window-maximize"),
   windowClose: () => ipcRenderer.invoke("window-close"),

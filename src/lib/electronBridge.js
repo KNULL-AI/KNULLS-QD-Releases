@@ -177,6 +177,14 @@ export function getDeviceId() {
   return invoke("getDeviceId");
 }
 
+export function getAppVersion() {
+  return invoke("getAppVersion");
+}
+
+export function checkForUpdatesManual() {
+  return invoke("checkForUpdatesManual");
+}
+
 /** Start/stop the background IMAP poll loop — runs in main process, survives page navigation */
 export function startImapPoll() {
   return invoke("startImapPoll");

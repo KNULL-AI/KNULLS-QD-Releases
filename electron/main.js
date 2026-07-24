@@ -41,6 +41,7 @@ try { Database = require("better-sqlite3"); } catch (_) { Database = null; }
 
 const DB_PATH = path.join(app.getPath ? app.getPath("userData") : __dirname, "knull.db");
 const DEVICE_ID_PATH = path.join(app.getPath ? app.getPath("userData") : __dirname, "device-id.txt");
+const PENDING_UPDATE_PATH = path.join(app.getPath ? app.getPath("userData") : __dirname, "pending-update.json");
 
 let _db = null;
 function getDb() {
@@ -103,6 +104,49 @@ function matchesQuery(record, query) {
   return Object.entries(query).every(([k, v]) => record[k] === v);
 }
 
+const SQL_SORT_KEYS = new Set(["id", "created_date", "updated_date"]);
+
+function parseSort(sort = "-created_date") {
+  const s = String(sort || "-created_date");
+  return {
+    desc: s.startsWith("-"),
+    key: s.replace("-", "") || "created_date",
+  };
+}
+
+function canPushDownQueryValue(value) {
+  return value === null || ["string", "number", "boolean"].includes(typeof value);
+}
+
+function buildJsonWhere(query = {}) {
+  const entries = Object.entries(query || {});
+  if (!entries.length) return { sql: "", params: [], pushdown: true };
+
+  const clauses = [];
+  const params = [];
+
+  for (const [key, value] of entries) {
+    if (!key || !canPushDownQueryValue(value)) {
+      return { sql: "", params: [], pushdown: false };
+    }
+
+    const path = `$."${String(key).replace(/"/g, '\\"')}"`;
+    if (value === null) {
+      clauses.push("json_type(data, ?) = 'null'");
+      params.push(path);
+    } else {
+      clauses.push("json_extract(data, ?) = ?");
+      params.push(path, value);
+    }
+  }
+
+  return {
+    sql: ` WHERE ${clauses.join(" AND ")}`,
+    params,
+    pushdown: true,
+  };
+}
+
 function sortRows(rows, sort) {
   const desc = sort.startsWith("-");
   const key = sort.replace("-", "");
@@ -116,14 +160,45 @@ function sortRows(rows, sort) {
 // ── DB IPC handlers ───────────────────────────────────────────────────────────
 ipcMain.handle("db:list", (_e, { table, sort = "-created_date", limit = 500 }) => {
   const db = getDb(); if (!db) return [];
+
+  const safeLimit = Math.max(0, Number(limit) || 0);
+  const { key, desc } = parseSort(sort);
+  if (SQL_SORT_KEYS.has(key)) {
+    return db
+      .prepare(`SELECT * FROM "${table}" ORDER BY ${key} ${desc ? "DESC" : "ASC"} LIMIT ?`)
+      .all(safeLimit)
+      .map(rowToRecord);
+  }
+
   const rows = db.prepare(`SELECT * FROM "${table}"`).all().map(rowToRecord);
-  return sortRows(rows, sort).slice(0, limit);
+  return sortRows(rows, sort).slice(0, safeLimit);
 });
 
 ipcMain.handle("db:filter", (_e, { table, query = {}, sort = "-created_date", limit = 500 }) => {
   const db = getDb(); if (!db) return [];
+
+  const safeLimit = Math.max(0, Number(limit) || 0);
+  const { key, desc } = parseSort(sort);
+  const where = buildJsonWhere(query);
+
+  if (where.pushdown && SQL_SORT_KEYS.has(key)) {
+    const rows = db
+      .prepare(`SELECT * FROM "${table}"${where.sql} ORDER BY ${key} ${desc ? "DESC" : "ASC"} LIMIT ?`)
+      .all(...where.params, safeLimit)
+      .map(rowToRecord);
+    return rows;
+  }
+
+  if (where.pushdown) {
+    const rows = db
+      .prepare(`SELECT * FROM "${table}"${where.sql}`)
+      .all(...where.params)
+      .map(rowToRecord);
+    return sortRows(rows, sort).slice(0, safeLimit);
+  }
+
   const rows = db.prepare(`SELECT * FROM "${table}"`).all().map(rowToRecord).filter((r) => matchesQuery(r, query));
-  return sortRows(rows, sort).slice(0, limit);
+  return sortRows(rows, sort).slice(0, safeLimit);
 });
 
 ipcMain.handle("db:get", (_e, { table, id }) => {
@@ -196,14 +271,18 @@ ipcMain.handle("db:bulkUpdate", (_e, { table, items }) => {
 ipcMain.handle("db:updateMany", (_e, { table, query, patch }) => {
   const db = getDb(); if (!db) return [];
   const now = new Date().toISOString();
-  const rows = db.prepare(`SELECT * FROM "${table}"`).all().map(rowToRecord).filter((r) => matchesQuery(r, query));
+  const where = buildJsonWhere(query);
+  const rows = where.pushdown
+    ? db.prepare(`SELECT * FROM "${table}"${where.sql}`).all(...where.params).map(rowToRecord)
+    : db.prepare(`SELECT * FROM "${table}"`).all().map(rowToRecord).filter((r) => matchesQuery(r, query));
   const results = [];
   const setData = patch.$set || patch;
+  const updateStmt = db.prepare(`UPDATE "${table}" SET data = ?, updated_date = ? WHERE id = ?`);
   const tx = db.transaction(() => {
     for (const r of rows) {
       const { id, created_date, updated_date, ...rest } = r;
       const merged = { ...rest, ...setData };
-      db.prepare(`UPDATE "${table}" SET data = ?, updated_date = ? WHERE id = ?`).run(JSON.stringify(merged), now, id);
+      updateStmt.run(JSON.stringify(merged), now, id);
       results.push({ id, created_date, updated_date: now, ...merged });
     }
   });
@@ -217,6 +296,13 @@ ipcMain.handle("db:deleteMany", (_e, { table, query }) => {
     db.prepare(`DELETE FROM "${table}"`).run();
     return;
   }
+
+  const where = buildJsonWhere(query);
+  if (where.pushdown) {
+    db.prepare(`DELETE FROM "${table}"${where.sql}`).run(...where.params);
+    return;
+  }
+
   const rows = db.prepare(`SELECT * FROM "${table}"`).all().map(rowToRecord).filter((r) => matchesQuery(r, query));
   const del = db.prepare(`DELETE FROM "${table}" WHERE id = ?`);
   const tx = db.transaction(() => { rows.forEach((r) => del.run(r.id)); });
@@ -225,6 +311,7 @@ ipcMain.handle("db:deleteMany", (_e, { table, query }) => {
 
 // Track task BrowserWindows: sessionId → BrowserWindow
 const browserWindows = new Map();
+const webContentsToSessionId = new Map(); // webContents.id -> sessionId
 // Cache the proxy assigned to each session so the app-level "login" handler
 // can resolve 407 proxy auth challenges in O(1) instead of querying the DB.
 const sessionProxies = new Map(); // sessionId → { host, username, password }
@@ -236,6 +323,7 @@ const manualOpenSessions = new Set();
 // Track queue timer intervals: sessionId → intervalId
 const timerIntervals = new Map();
 const timerMeta = new Map(); // sessionId -> { ms, mode: "up" | "down" }
+const queuePersistMeta = new Map(); // sessionId -> { ms, at }
 
 function clearQueueTimer(sessionId) {
   if (timerIntervals.has(sessionId)) {
@@ -243,11 +331,20 @@ function clearQueueTimer(sessionId) {
     timerIntervals.delete(sessionId);
   }
   timerMeta.delete(sessionId);
+  queuePersistMeta.delete(sessionId);
 }
 
 function getSessionIdByWebContents(webContents) {
+  if (!webContents) return null;
+
+  const fast = webContentsToSessionId.get(webContents.id);
+  if (fast) return fast;
+
   for (const [sessionId, win] of browserWindows.entries()) {
-    if (win && !win.isDestroyed() && win.webContents === webContents) return sessionId;
+    if (win && !win.isDestroyed() && win.webContents === webContents) {
+      webContentsToSessionId.set(webContents.id, sessionId);
+      return sessionId;
+    }
   }
   return null;
 }
@@ -292,7 +389,11 @@ const DEBUG_SESSION_DEVTOOLS = process.env.KNULL_DEBUG_SESSION_DEVTOOLS === "1";
 ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAgent, browser, profile, noPreload = false, manualOpen = false, credentials = null, partitionKey = null }) => {
   // Close existing window for this session if any
   if (browserWindows.has(sessionId)) {
-    try { browserWindows.get(sessionId).destroy(); } catch (_) {}
+    const existing = browserWindows.get(sessionId);
+    if (existing?.webContents?.id != null) {
+      webContentsToSessionId.delete(existing.webContents.id);
+    }
+    try { existing.destroy(); } catch (_) {}
     browserWindows.delete(sessionId);
   }
 
@@ -380,7 +481,12 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   else manualOpenSessions.delete(sessionId);
 
   win.on("closed", () => {
-    browserWindows.delete(sessionId);
+    if (win.webContents?.id != null && webContentsToSessionId.get(win.webContents.id) === sessionId) {
+      webContentsToSessionId.delete(win.webContents.id);
+    }
+    if (browserWindows.get(sessionId) === win) {
+      browserWindows.delete(sessionId);
+    }
     sessionProxies.delete(sessionId);
     sessionCredentials.delete(sessionId);
     clearQueueTimer(sessionId);
@@ -551,6 +657,9 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   win.loadURL(url);
 
   browserWindows.set(sessionId, win);
+  if (win.webContents?.id != null) {
+    webContentsToSessionId.set(win.webContents.id, sessionId);
+  }
   if (proxy) sessionProxies.set(sessionId, { host: proxy.host, username: proxy.username, password: proxy.password || "" });
   if (credentials?.email && credentials?.password) sessionCredentials.set(sessionId, { email: credentials.email, password: credentials.password });
   else sessionCredentials.delete(sessionId);
@@ -920,20 +1029,30 @@ ipcMain.on("queue-wait-detected", (_event, payload) => {
   const remainingMs = Number(payload?.remainingMs);
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) return;
 
-  // Persist latest observed wait to session record for visibility after reload.
-  const db = getDb();
-  if (db) {
-    const row = db.prepare('SELECT * FROM "BrowserSession" WHERE id = ?').get(sessionId);
-    if (row) {
-      const rec = rowToRecord(row);
-      const merged = { ...rec, queue_timer_ms: Math.floor(remainingMs) };
-      const now = new Date().toISOString();
-      db.prepare('UPDATE "BrowserSession" SET data = ?, updated_date = ? WHERE id = ?')
-        .run(JSON.stringify((({ id, created_date, updated_date, ...rest }) => rest)(merged)), now, sessionId);
+  const nextMs = Math.floor(remainingMs);
+  const persisted = queuePersistMeta.get(sessionId);
+  const nowTs = Date.now();
+  const shouldPersist = !persisted
+    || Math.abs(nextMs - persisted.ms) >= 15000
+    || (nowTs - persisted.at) >= 60000;
+
+  // Persist selectively to reduce write load with many active sessions.
+  if (shouldPersist) {
+    const db = getDb();
+    if (db) {
+      const row = db.prepare('SELECT * FROM "BrowserSession" WHERE id = ?').get(sessionId);
+      if (row) {
+        const rec = rowToRecord(row);
+        const merged = { ...rec, queue_timer_ms: nextMs };
+        const now = new Date().toISOString();
+        db.prepare('UPDATE "BrowserSession" SET data = ?, updated_date = ? WHERE id = ?')
+          .run(JSON.stringify((({ id, created_date, updated_date, ...rest }) => rest)(merged)), now, sessionId);
+      }
     }
+    queuePersistMeta.set(sessionId, { ms: nextMs, at: nowTs });
   }
 
-  startQueueTimerInternal(sessionId, Math.floor(remainingMs), "down");
+  startQueueTimerInternal(sessionId, nextMs, "down");
 });
 
 // Session windows report captcha lifecycle events so renderer can open
@@ -1154,6 +1273,7 @@ function _doUpdateTray() {
           clearQueueTimer(sessionId);
         }
         browserWindows.clear();
+        webContentsToSessionId.clear();
         sessionProxies.clear();
         sessionCredentials.clear();
         updateTray();
@@ -1205,6 +1325,7 @@ function confirmAndExit(win) {
       try { bwin.destroy(); } catch (_) {}
     }
     browserWindows.clear();
+    webContentsToSessionId.clear();
     sessionProxies.clear();
     sessionCredentials.clear();
     app.exit(0);
@@ -1280,6 +1401,70 @@ app.on("login", (_event, _webContents, _req, authInfo, callback) => {
   callback();
 });
 
+function compareVersion(a, b) {
+  const ap = String(a || "0").split(".").map((n) => Number(n) || 0);
+  const bp = String(b || "0").split(".").map((n) => Number(n) || 0);
+  const len = Math.max(ap.length, bp.length);
+  for (let i = 0; i < len; i += 1) {
+    const av = ap[i] || 0;
+    const bv = bp[i] || 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+}
+
+function savePendingUpdate(info = {}) {
+  try {
+    const payload = {
+      version: String(info?.version || ""),
+      savedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(PENDING_UPDATE_PATH, JSON.stringify(payload), "utf8");
+  } catch (_) {}
+}
+
+function loadPendingUpdate() {
+  try {
+    if (!fs.existsSync(PENDING_UPDATE_PATH)) return null;
+    const raw = fs.readFileSync(PENDING_UPDATE_PATH, "utf8");
+    const parsed = JSON.parse(raw || "{}");
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearPendingUpdate() {
+  try {
+    if (fs.existsSync(PENDING_UPDATE_PATH)) fs.unlinkSync(PENDING_UPDATE_PATH);
+  } catch (_) {}
+}
+
+async function promptInstallDownloadedUpdate(version) {
+  const safeVersion = String(version || "new");
+  try {
+    const res = await dialog.showMessageBox(mainWindow || null, {
+      type: "info",
+      title: "Update Ready",
+      message: `Version ${safeVersion} has been downloaded.`,
+      detail: "Restart the app now to install this update.",
+      buttons: ["Restart Now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (res.response === 0) {
+      clearPendingUpdate();
+      autoUpdater.quitAndInstall(false, true);
+    } else {
+      savePendingUpdate({ version: safeVersion });
+    }
+  } catch (e) {
+    console.error("[knull] Failed to show update dialog:", e?.message || e);
+  }
+}
+
 function setupAutoUpdater() {
   if (!app.isPackaged) {
     console.log("[knull] Auto-updater disabled in development mode");
@@ -1313,28 +1498,79 @@ function setupAutoUpdater() {
 
   autoUpdater.on("update-downloaded", async (info) => {
     console.log(`[knull] Update downloaded: ${info?.version || "unknown"}`);
-    try {
-      const res = await dialog.showMessageBox(mainWindow || null, {
-        type: "info",
-        title: "Update Ready",
-        message: `Version ${info?.version || "new"} has been downloaded.`,
-        detail: "Restart the app now to install this update.",
-        buttons: ["Restart Now", "Later"],
-        defaultId: 0,
-        cancelId: 1,
-      });
-      if (res.response === 0) {
-        autoUpdater.quitAndInstall(false, true);
-      }
-    } catch (e) {
-      console.error("[knull] Failed to show update dialog:", e?.message || e);
-    }
+    savePendingUpdate(info);
+    await promptInstallDownloadedUpdate(info?.version);
   });
+
+  // If an update was already downloaded in a previous run but the user clicked
+  // "Later", remind on next launch so the install prompt is not missed.
+  const pending = loadPendingUpdate();
+  if (pending?.version) {
+    if (compareVersion(pending.version, app.getVersion()) <= 0) {
+      clearPendingUpdate();
+    } else {
+      setTimeout(() => {
+        promptInstallDownloadedUpdate(pending.version).catch(() => {});
+      }, 1500);
+    }
+  }
 
   autoUpdater.checkForUpdates().catch((e) => {
     console.error("[knull] checkForUpdates failed:", e?.message || e);
   });
 }
+
+ipcMain.handle("check-for-updates-manual", async () => {
+  if (!app.isPackaged) {
+    return { ok: false, reason: "not-packaged", message: "Updater is disabled in development mode." };
+  }
+
+  const pending = loadPendingUpdate();
+  if (pending?.version && compareVersion(pending.version, app.getVersion()) > 0) {
+    promptInstallDownloadedUpdate(pending.version).catch(() => {});
+    return {
+      ok: true,
+      status: "update-ready",
+      currentVersion: app.getVersion(),
+      pendingVersion: pending.version,
+      message: `Version ${pending.version} is already downloaded and ready to install.`,
+    };
+  }
+
+  try {
+    const res = await autoUpdater.checkForUpdates();
+    const info = res?.updateInfo || null;
+    const nextVersion = info?.version || null;
+    if (nextVersion && compareVersion(nextVersion, app.getVersion()) > 0) {
+      return {
+        ok: true,
+        status: "checking-started",
+        currentVersion: app.getVersion(),
+        nextVersion,
+        message: `Update ${nextVersion} found. Downloading in background...`,
+      };
+    }
+
+    return {
+      ok: true,
+      status: "up-to-date",
+      currentVersion: app.getVersion(),
+      message: "You are already on the latest version.",
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: "check-failed",
+      message: e?.message || "Manual update check failed.",
+    };
+  }
+});
+
+ipcMain.handle("get-app-version", () => ({
+  ok: true,
+  version: app.getVersion(),
+  packaged: app.isPackaged,
+}));
 
 app.whenReady().then(() => {
   createWindow();
@@ -1367,6 +1603,7 @@ app.on("before-quit", () => {
     try { bwin.destroy(); } catch (_) {}
   }
   browserWindows.clear();
+  webContentsToSessionId.clear();
   sessionProxies.clear();
   sessionCredentials.clear();
   imapPollActive = false;

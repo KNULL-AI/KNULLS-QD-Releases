@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import toast from "react-hot-toast";
-import { imapFetch, injectVerificationCode, startImapPoll, stopImapPoll, getImapPollStatus, onImapPollEvent, offImapPollEvent } from "@/lib/electronBridge";
+import { checkForUpdatesManual, getAppVersion, imapFetch, injectVerificationCode, startImapPoll, stopImapPoll, getImapPollStatus, onImapPollEvent, offImapPollEvent } from "@/lib/electronBridge";
 
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 
@@ -386,6 +386,23 @@ export default function Settings() {
   const [tab, setTab] = useState("General");
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [installedVersion, setInstalledVersion] = useState(APP_VERSION);
+  const [isPackagedApp, setIsPackagedApp] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    getAppVersion()
+      .then((res) => {
+        if (!alive || !res?.ok) return;
+        if (res.version) setInstalledVersion(res.version);
+        setIsPackagedApp(!!res.packaged);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const handleExport = async () => {
     setExporting(true);
@@ -408,6 +425,28 @@ export default function Settings() {
     e.target.value = "";
   };
 
+  const handleCheckUpdates = async () => {
+    setCheckingUpdates(true);
+    try {
+      const res = await checkForUpdatesManual();
+      if (res?.ok) {
+        if (res.status === "update-ready") {
+          toast.success(res.message || "Update is downloaded and ready to install.", { duration: 5000 });
+        } else if (res.status === "checking-started") {
+          toast.success(res.message || "Update found. Downloading in background...", { duration: 5000 });
+        } else {
+          toast(res.message || "You are already on the latest version.");
+        }
+      } else {
+        toast.error(res?.message || "Could not check for updates.", { duration: 5000 });
+      }
+    } catch (err) {
+      toast.error(`Could not check for updates: ${err?.message || "Unknown error"}`, { duration: 5000 });
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
+
   return (
     <div className="space-y-5 max-w-2xl">
       <div>
@@ -427,6 +466,20 @@ export default function Settings() {
 
       {tab === "General" && (
         <div className="space-y-5">
+          <div className="border border-white/5 bg-[#08080f] rounded-sm p-5 space-y-3">
+            <h2 className="font-mono text-xs text-gray-400 uppercase tracking-wider">App Updates</h2>
+            <p className="text-[11px] font-mono text-gray-600">
+              Trigger an immediate update check from the installed app. If an update is already downloaded, this will show the install prompt.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <Button onClick={handleCheckUpdates} disabled={checkingUpdates} className="bg-blue-600 hover:bg-blue-700 font-mono text-xs gap-2">
+                <RefreshCw className={`w-3.5 h-3.5 ${checkingUpdates ? "animate-spin" : ""}`} />
+                {checkingUpdates ? "Checking..." : "Check for Updates"}
+              </Button>
+              <span className="text-[10px] font-mono text-gray-600">Installed version: {installedVersion} {isPackagedApp ? "(packaged)" : "(dev)"}</span>
+            </div>
+          </div>
+
           <div className="border border-white/5 bg-[#08080f] rounded-sm p-5 space-y-4">
             <h2 className="font-mono text-xs text-gray-400 uppercase tracking-wider">Import / Export Config</h2>
             <p className="text-[11px] font-mono text-gray-600">
@@ -460,6 +513,7 @@ export default function Settings() {
           <h2 className="font-mono text-xs text-gray-400 uppercase tracking-wider">About</h2>
           <div className="space-y-1">
             <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Version</span><span className="text-gray-300">{APP_VERSION}</span></div>
+            <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Installed</span><span className="text-gray-300">{installedVersion} {isPackagedApp ? "(packaged)" : "(dev)"}</span></div>
             <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Build</span><span className="text-gray-300">KNULL Queue Destroyer</span></div>
             <div className="flex justify-between text-[11px] font-mono"><span className="text-gray-600">Architecture</span><span className="text-gray-300">React + Electron + SQLite</span></div>
           </div>

@@ -20,6 +20,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const SERVER_SOLVER_ENDPOINT = import.meta.env.VITE_CAPTCHA_SERVER_ENDPOINT || "https://your-endpoint-here.com/captcha";
+const PERF_METRICS_STORAGE_KEY = "knull_perf_metrics";
+const PERF_PANEL_STORAGE_KEY = "knull_perf_panel";
 
 const HARVESTER_TYPES = [
   { value: "pokemon_center", label: "PokemonCenter" },
@@ -133,6 +135,20 @@ function normalizeHarvester(row, idx) {
 
 function getProviderMeta(provider) {
   return SOLVER_PROVIDERS.find((p) => p.value === provider) || SOLVER_PROVIDERS[0];
+}
+
+function nowMs() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function percentile(values, p) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[idx];
 }
 
 function HarvesterDialog({ open, onOpenChange, initial, onSave, saving }) {
@@ -559,11 +575,118 @@ export default function CaptchaSolver() {
 
   const [runtimePopups, setRuntimePopups] = useState([]);
   const [testingById, setTestingById] = useState({});
+  const [perfPanelEnabled, setPerfPanelEnabled] = useState(false);
+  const [perfRows, setPerfRows] = useState([]);
+  const harvestersRef = useRef([]);
+  const harvesterByIdRef = useRef(new Map());
+  const onDemandHarvestersRef = useRef([]);
   const popupSeqRef = useRef(0);
   const assignmentCursorRef = useRef(0);
   const sessionHarvesterRef = useRef({});
   const solveInFlightRef = useRef(new Set());
   const manualHintedRef = useRef(new Set());
+  const perfStatsRef = useRef({});
+  const perfMetricsEnabledRef = useRef(false);
+  const perfPanelEnabledRef = useRef(false);
+
+  const readPerfToggles = () => {
+    try {
+      const metricsEnabled = window.localStorage.getItem(PERF_METRICS_STORAGE_KEY) === "1";
+      const panelEnabled = window.localStorage.getItem(PERF_PANEL_STORAGE_KEY) === "1";
+      perfMetricsEnabledRef.current = metricsEnabled;
+      perfPanelEnabledRef.current = panelEnabled;
+      setPerfPanelEnabled(panelEnabled);
+    } catch {
+      perfMetricsEnabledRef.current = false;
+      perfPanelEnabledRef.current = false;
+      setPerfPanelEnabled(false);
+    }
+  };
+
+  const snapshotPerfRows = () => {
+    const rows = Object.entries(perfStatsRef.current)
+      .map(([key, s]) => {
+        const p50 = percentile(s.totalSamples, 0.5);
+        const p95 = percentile(s.totalSamples, 0.95);
+        const solverP50 = percentile(s.solverSamples, 0.5);
+        const solverP95 = percentile(s.solverSamples, 0.95);
+        const injectP50 = percentile(s.injectSamples, 0.5);
+        const injectP95 = percentile(s.injectSamples, 0.95);
+        return {
+          key,
+          count: s.count,
+          p50: Math.round(p50),
+          p95: Math.round(p95),
+          solverP50: Math.round(solverP50),
+          solverP95: Math.round(solverP95),
+          injectP50: Math.round(injectP50),
+          injectP95: Math.round(injectP95),
+          okRate: s.count > 0 ? Math.round((s.okCount / s.count) * 100) : 0,
+          lastAt: s.lastAt || 0,
+        };
+      })
+      .sort((a, b) => (b.lastAt - a.lastAt) || (b.count - a.count))
+      .slice(0, 6);
+    setPerfRows(rows);
+  };
+
+  useEffect(() => {
+    readPerfToggles();
+    const interval = setInterval(readPerfToggles, 1200);
+    return () => clearInterval(interval);
+  }, []);
+
+  const recordSolvePerf = ({ provider, mode, type, detectToSolveMs, solverMs, injectMs, totalMs, ok }) => {
+    if (!perfMetricsEnabledRef.current) return;
+
+    const key = `${provider}:${mode}:${type}`;
+    const stats = perfStatsRef.current[key] || {
+      count: 0,
+      okCount: 0,
+      totalSamples: [],
+      solverSamples: [],
+      injectSamples: [],
+      detectSamples: [],
+      lastAt: 0,
+    };
+
+    const clamp = (arr, value) => {
+      if (Number.isFinite(value)) arr.push(Math.max(0, Math.round(value)));
+      if (arr.length > 80) arr.splice(0, arr.length - 80);
+    };
+
+    stats.count += 1;
+    if (ok) stats.okCount += 1;
+    stats.lastAt = Date.now();
+    clamp(stats.totalSamples, totalMs);
+    clamp(stats.solverSamples, solverMs);
+    clamp(stats.injectSamples, injectMs);
+    clamp(stats.detectSamples, detectToSolveMs);
+    perfStatsRef.current[key] = stats;
+
+    const p50Total = percentile(stats.totalSamples, 0.5);
+    const p95Total = percentile(stats.totalSamples, 0.95);
+    const p50Solver = percentile(stats.solverSamples, 0.5);
+    const p95Solver = percentile(stats.solverSamples, 0.95);
+
+    // Default-off console telemetry for tuning provider speed without UI noise.
+    console.info(
+      `[captcha-perf] ${key} count=${stats.count} ok=${ok ? "1" : "0"} `
+      + `total=${Math.round(totalMs)}ms solver=${Math.round(solverMs)}ms inject=${Math.round(injectMs)}ms `
+      + `detect=${Math.round(detectToSolveMs)}ms p50=${Math.round(p50Total)}ms p95=${Math.round(p95Total)}ms `
+      + `solver_p50=${Math.round(p50Solver)}ms solver_p95=${Math.round(p95Solver)}ms`
+    );
+
+    if (perfPanelEnabledRef.current) {
+      snapshotPerfRows();
+    }
+  };
+
+  useEffect(() => {
+    harvestersRef.current = harvesters;
+    harvesterByIdRef.current = new Map(harvesters.map((h) => [h.id, h]));
+    onDemandHarvestersRef.current = harvesters.filter((h) => h.open_on_demand !== false);
+  }, []);
 
   const activeCount = useMemo(() => harvesters.filter((h) => h.is_open).length, [harvesters]);
 
@@ -622,6 +745,12 @@ export default function CaptchaSolver() {
   };
 
   const patchHarvester = async (id, patch) => {
+    const current = harvesterByIdRef.current.get(id);
+    if (current) {
+      const keys = Object.keys(patch || {});
+      if (keys.length && keys.every((k) => current[k] === patch[k])) return;
+    }
+
     await db.CaptchaConfig.update(id, patch);
     setHarvesters((prev) => prev.map((h) => (h.id === id ? { ...h, ...patch } : h)));
   };
@@ -708,7 +837,7 @@ export default function CaptchaSolver() {
   };
 
   const chooseOnDemandHarvester = () => {
-    const candidates = harvesters.filter((h) => h.open_on_demand !== false);
+    const candidates = onDemandHarvestersRef.current;
     if (!candidates.length) return null;
     const idx = assignmentCursorRef.current % candidates.length;
     assignmentCursorRef.current += 1;
@@ -740,6 +869,13 @@ export default function CaptchaSolver() {
     const sessionId = String(event?.sessionId || "");
     const inFlightKey = `${sessionId}:${event?.type || "unknown"}:${event?.siteKey || ""}`;
     if (!sessionId || solveInFlightRef.current.has(inFlightKey)) return;
+
+    const type = event?.type || "recaptchav2";
+    const mode = harvester.solver_mode;
+    const provider = harvester.provider;
+    const solveStartMs = nowMs();
+    const detectedAtMs = Date.parse(String(event?.at || ""));
+    const detectToSolveMs = Number.isFinite(detectedAtMs) ? Math.max(0, Date.now() - detectedAtMs) : 0;
 
     const notifyManual = (message) => {
       const key = `${sessionId}:${harvester.id}`;
@@ -781,37 +917,81 @@ export default function CaptchaSolver() {
     setPopupStatusByHarvester(harvester.id, "solving");
 
     try {
+      const solverStartMs = nowMs();
       const result = await callSolverServer({
         action: "solve",
-        mode: harvester.solver_mode,
-        provider: harvester.provider,
-        type: event?.type || "recaptchav2",
+        mode,
+        provider,
+        type,
         siteKey: event?.siteKey || "",
         pageUrl: event?.pageUrl || "",
         personalApiKey: harvester.personal_api_key,
         personalAccessToken: harvester.personal_access_token,
         harvesterName: harvester.name,
       }, endpoint);
+      const solverMs = nowMs() - solverStartMs;
 
       const token = result?.token || result?.solution || "";
       if (!result?.ok || !token) {
         const errorMsg = result?.error || "Solver did not return a token";
         setPopupStatusByHarvester(harvester.id, "error");
         toast.error(`${harvester.name}: ${errorMsg}`);
+        recordSolvePerf({
+          provider,
+          mode,
+          type,
+          detectToSolveMs,
+          solverMs,
+          injectMs: 0,
+          totalMs: nowMs() - solveStartMs,
+          ok: false,
+        });
         return;
       }
 
-      const injectRes = await injectCaptchaToken(sessionId, event?.type || "recaptchav2", token);
+      const injectStartMs = nowMs();
+      const injectRes = await injectCaptchaToken(sessionId, type, token);
+      const injectMs = nowMs() - injectStartMs;
       if (injectRes?.ok === false) {
         setPopupStatusByHarvester(harvester.id, "error");
         toast.error(`${harvester.name}: ${injectRes.error || "Token injection failed"}`);
+        recordSolvePerf({
+          provider,
+          mode,
+          type,
+          detectToSolveMs,
+          solverMs,
+          injectMs,
+          totalMs: nowMs() - solveStartMs,
+          ok: false,
+        });
         return;
       }
 
       setPopupStatusByHarvester(harvester.id, "solved");
+      recordSolvePerf({
+        provider,
+        mode,
+        type,
+        detectToSolveMs,
+        solverMs,
+        injectMs,
+        totalMs: nowMs() - solveStartMs,
+        ok: true,
+      });
     } catch {
       setPopupStatusByHarvester(harvester.id, "error");
       toast.error(`${harvester.name}: solver request failed`);
+      recordSolvePerf({
+        provider,
+        mode,
+        type,
+        detectToSolveMs,
+        solverMs: 0,
+        injectMs: 0,
+        totalMs: nowMs() - solveStartMs,
+        ok: false,
+      });
     } finally {
       solveInFlightRef.current.delete(inFlightKey);
     }
@@ -819,7 +999,7 @@ export default function CaptchaSolver() {
 
   const runCaptchaTest = async (harvesterOrId, kind) => {
     const harvester = typeof harvesterOrId === "string"
-      ? harvesters.find((h) => h.id === harvesterOrId)
+      ? harvesterByIdRef.current.get(harvesterOrId)
       : harvesterOrId;
 
     if (!harvester) return;
@@ -855,7 +1035,9 @@ export default function CaptchaSolver() {
   };
 
   const openRuntime = async (harvester) => {
-    await patchHarvester(harvester.id, { is_open: true });
+    if (!harvester.is_open) {
+      await patchHarvester(harvester.id, { is_open: true });
+    }
     pushRuntimePopup({ ...harvester, is_open: true }, "waiting");
   };
 
@@ -863,7 +1045,7 @@ export default function CaptchaSolver() {
     const wrapper = onCaptchaEvent(async (event) => {
       const sessionId = String(event?.sessionId || "");
       const assignedHarvesterId = sessionId ? sessionHarvesterRef.current[sessionId] : null;
-      let harvester = assignedHarvesterId ? harvesters.find((h) => h.id === assignedHarvesterId) : null;
+      let harvester = assignedHarvesterId ? harvesterByIdRef.current.get(assignedHarvesterId) : null;
 
       if (!harvester) {
         harvester = chooseOnDemandHarvester();
@@ -872,7 +1054,10 @@ export default function CaptchaSolver() {
 
       if (!harvester) return;
 
-      await patchHarvester(harvester.id, { is_open: true });
+      if (!harvester.is_open) {
+        patchHarvester(harvester.id, { is_open: true }).catch(() => {});
+        harvester = { ...harvester, is_open: true };
+      }
       if (event?.eventType === "solved") {
         pushRuntimePopup(harvester, "solved", event);
         if (sessionId) delete sessionHarvesterRef.current[sessionId];
@@ -983,6 +1168,30 @@ export default function CaptchaSolver() {
               testingKind={testingById[popup.harvesterId] || ""}
             />
           ))}
+        </div>
+      )}
+
+      {perfPanelEnabled && (
+        <div className="fixed left-4 bottom-4 z-40 w-[420px] max-w-[calc(100vw-2rem)] rounded-xl border border-cyan-400/30 bg-[#07111f]/95 backdrop-blur px-3 py-2 shadow-lg shadow-cyan-500/10">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-mono text-[11px] text-cyan-200">Solve Performance</span>
+            <span className="font-mono text-[10px] text-cyan-400">p50 / p95 ms</span>
+          </div>
+          {perfRows.length === 0 ? (
+            <div className="font-mono text-[10px] text-cyan-300/70">Waiting for solve samples...</div>
+          ) : (
+            <div className="space-y-1">
+              {perfRows.map((row) => (
+                <div key={row.key} className="grid grid-cols-[1.8fr_1fr_1fr_1fr] gap-2 text-[10px] font-mono text-cyan-100/90">
+                  <span className="truncate" title={row.key}>{row.key}</span>
+                  <span title="Total">{row.p50}/{row.p95}</span>
+                  <span title="Solver">{row.solverP50}/{row.solverP95}</span>
+                  <span title="OK rate">{row.okRate}% ({row.count})</span>
+                </div>
+              ))}
+              <div className="pt-1 text-[9px] font-mono text-cyan-300/70">Columns: key | total | solver | success</div>
+            </div>
+          )}
         </div>
       )}
     </div>
