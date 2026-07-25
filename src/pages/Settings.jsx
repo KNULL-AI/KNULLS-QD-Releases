@@ -400,7 +400,7 @@ function MonitoringSection() {
 
 // ─── AI Section ───────────────────────────────────────────────────────────────
 
-const DEFAULT_GEMINI_KEY = "AQ.Ab8RN6LahkglZ7UiDjaF1JFEPeI0xfYpW5ET-U_nfi_i-Cyf_w";
+const DEFAULT_GEMINI_KEY = ""; // Moved to main.js environment variable
 
 function AISection() {
   const [key, setKey] = useState("");
