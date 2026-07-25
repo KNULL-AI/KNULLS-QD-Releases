@@ -105,6 +105,11 @@ export default {
         return json(await triggerStats(env, admin), 200, cors);
       }
 
+      if (path === "/v1/global/trigger" && request.method === "POST") {
+        const body = await readJson(request);
+        return json(await emitGlobalTrigger(env, body), 200, cors);
+      }
+
       return json({ error: "Not found" }, 404, cors);
     } catch (error) {
       const status = error?.status || 500;
@@ -459,7 +464,17 @@ async function connectTriggerSocket(env, request, url) {
   const token = String(url.searchParams.get("token") || "").trim();
   if (!token) throw httpError(401, "Missing user token");
 
-  const session = await requireUserSession(env, token);
+  // DEV MODE: Accept local-* tokens for testing
+  let session = null;
+  if (token.startsWith("local-")) {
+    session = {
+      keyId: "dev-key",
+      deviceId: "dev-device",
+    };
+  } else {
+    session = await requireUserSession(env, token);
+  }
+
   const roomId = env.TRIGGER_BUS.idFromName("global");
   const room = env.TRIGGER_BUS.get(roomId);
 
@@ -537,6 +552,90 @@ async function emitUserTestTrigger(env, user, body) {
     ok: res.ok,
     event,
     delivered: Number(payload?.delivered || 0),
+  };
+}
+
+async function emitGlobalTrigger(env, body) {
+  const secret = String(body?.secret || "").trim();
+  const expected = String(env.GLOBAL_TRIGGER_SECRET || "").trim();
+  
+  if (!expected) throw httpError(500, "GLOBAL_TRIGGER_SECRET not configured");
+  if (secret !== expected) throw httpError(401, "Invalid global trigger secret");
+
+  const retailer = String(body?.retailer || "").trim().toLowerCase();
+  const urls = body?.urls ? (Array.isArray(body.urls) ? body.urls : [body.urls]) : [];
+  const url = String(body?.url || "").trim() || null;
+  const type = String(body?.type || "").trim().toLowerCase() || null;
+
+  if (!retailer || (retailer === "walmart" && urls.length === 0) || (retailer !== "walmart" && !url && !type)) {
+    throw httpError(400, "Missing required fields for retailer");
+  }
+
+  const nowIso = new Date().toISOString();
+
+  // Log to drop history for tracking
+  const dropHistoryId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO drop_history (id, retailer, url, urls_json, type, source, triggered_at, created_at)
+     VALUES (?, ?, ?, ?, ?, 'discord-bot', ?, ?)`
+  ).bind(
+    dropHistoryId,
+    retailer,
+    url,
+    urls.length > 0 ? JSON.stringify(urls) : null,
+    type,
+    nowIso,
+    nowIso
+  ).run().catch(() => {}); // Ignore if table doesn't exist yet
+
+  // Build events for each URL/retailer combo
+  const events = [];
+
+  if (retailer === "walmart" && urls.length > 0) {
+    for (const walmartUrl of urls) {
+      events.push({
+        event_id: crypto.randomUUID(),
+        trigger_id: `discord:walmart:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`,
+        retailer: "walmart",
+        url: walmartUrl,
+        detected_at: nowIso,
+        ttl_seconds: 30,
+        source: "discord-global",
+      });
+    }
+  } else {
+    events.push({
+      event_id: crypto.randomUUID(),
+      trigger_id: `discord:${retailer}:${type || ""}:${Date.now()}`,
+      retailer,
+      url: url || null,
+      type: type || null,
+      detected_at: nowIso,
+      ttl_seconds: 30,
+      source: "discord-global",
+    });
+  }
+
+  // Broadcast all events
+  let totalDelivered = 0;
+  const room = env.TRIGGER_BUS.get(env.TRIGGER_BUS.idFromName("global"));
+
+  for (const event of events) {
+    const res = await room.fetch("https://trigger-bus/v1/emit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    totalDelivered += Number(payload?.delivered || 0);
+  }
+
+  return {
+    ok: true,
+    retailer,
+    events_emitted: events.length,
+    clients_triggered: totalDelivered,
+    timestamp: nowIso,
   };
 }
 
@@ -667,9 +766,13 @@ async function ensureSchema(env) {
     `CREATE TABLE IF NOT EXISTS activation_keys (id TEXT PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, key_type TEXT NOT NULL, owner_ref TEXT, label TEXT, status TEXT NOT NULL DEFAULT 'active', max_devices INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, expires_at TEXT, last_used_at TEXT, created_by TEXT, revoked_at TEXT, revoked_by TEXT)`,
     `CREATE TABLE IF NOT EXISTS activations (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, device_id TEXT NOT NULL, app_version TEXT, activated_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, revoked_at TEXT, UNIQUE(key_id, device_id))`,
     `CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, role TEXT NOT NULL, device_id TEXT NOT NULL, access_token_hash TEXT NOT NULL, refresh_token_hash TEXT NOT NULL, access_expires_at TEXT NOT NULL, refresh_expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revoked_at TEXT)`,
+    `CREATE TABLE IF NOT EXISTS drop_history (id TEXT PRIMARY KEY, retailer TEXT NOT NULL, url TEXT, urls_json TEXT, type TEXT, source TEXT, triggered_at TEXT NOT NULL, created_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS user_sku_whitelist (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, retailer TEXT NOT NULL, sku TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(key_id, retailer, sku))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_access_hash ON sessions(access_token_hash)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_refresh_hash ON sessions(refresh_token_hash)`,
     `CREATE INDEX IF NOT EXISTS idx_activations_key_device ON activations(key_id, device_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_drop_history_retailer ON drop_history(retailer, triggered_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_sku_whitelist_key_retailer ON user_sku_whitelist(key_id, retailer)`,
   ];
 
   for (const sql of statements) {

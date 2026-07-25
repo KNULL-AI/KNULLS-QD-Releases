@@ -231,4 +231,5 @@ export const db = {
   ImapConfig:      makeCollection("ImapConfig"),
   VerificationCode:makeCollection("VerificationCode"),
   CaptchaConfig:   makeCollection("CaptchaConfig"),
+  WalmartSkuWhitelist: makeCollection("WalmartSkuWhitelist"),
 };
