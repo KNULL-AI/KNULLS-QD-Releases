@@ -1688,8 +1688,8 @@ app.on("before-quit", () => {
 
 // ── IPC: Gemini AI diagnostics ────────────────────────────────────────────────
 // API key lives ONLY in the main process — never sent to or stored in the renderer.
-const GEMINI_API_KEY = "AQ.Ab8RN6LahkglZ7UiDjaF1JFEPeI0xfYpW5ET-U_nfi_i-Cyf_w";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_URL = GEMINI_API_KEY ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}` : "";
 let GEMINI_URL_OVERRIDE = null;
 
 ipcMain.handle("set-gemini-key", (_event, key) => {
