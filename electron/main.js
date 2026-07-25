@@ -480,9 +480,13 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   if (manualOpen) manualOpenSessions.add(sessionId);
   else manualOpenSessions.delete(sessionId);
 
+  // Save webContents ID before the window closes — accessing win.webContents
+  // after "closed" throws "Object has been destroyed".
+  const wcId = win.webContents?.id ?? null;
+
   win.on("closed", () => {
-    if (win.webContents?.id != null && webContentsToSessionId.get(win.webContents.id) === sessionId) {
-      webContentsToSessionId.delete(win.webContents.id);
+    if (wcId != null && webContentsToSessionId.get(wcId) === sessionId) {
+      webContentsToSessionId.delete(wcId);
     }
     if (browserWindows.get(sessionId) === win) {
       browserWindows.delete(sessionId);
@@ -491,7 +495,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     sessionCredentials.delete(sessionId);
     clearQueueTimer(sessionId);
     // Only fire session-crashed if it was NOT an intentional kill and NOT a manual open
-    if (!intentionalKills.has(sessionId) && !manualOpenSessions.has(sessionId) && mainWindow) {
+    if (!intentionalKills.has(sessionId) && !manualOpenSessions.has(sessionId) && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("session-crashed", { sessionId, code: 0 });
     }
     intentionalKills.delete(sessionId);
