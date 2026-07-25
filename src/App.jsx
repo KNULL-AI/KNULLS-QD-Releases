@@ -23,6 +23,7 @@ import { onImapPollEvent, offImapPollEvent } from '@/lib/electronBridge';
 import { db } from '@/lib/db';
 import { connectTriggerBus } from '@/lib/triggerBus';
 import { prewarmTaskLaunchPath, runTaskGroup } from '@/lib/taskGroupLauncher';
+import { useTriggerListener } from '@/lib/useTriggerListener';
 
 function AppContent() {
   const { isAuthenticated, authSession, getValidAccessToken } = useAuth();
@@ -145,6 +146,10 @@ function AppContent() {
       if (stopBus) stopBus();
     };
   }, [isAuthenticated, authSession?.ws_url, getValidAccessToken]);
+
+  // Listen for global Discord trigger events and auto-launch task groups
+  const accessToken = isAuthenticated ? authSession?.access_token : null;
+  useTriggerListener(accessToken);
 
   return (
     <QueryClientProvider client={queryClientInstance}>

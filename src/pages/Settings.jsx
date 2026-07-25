@@ -291,6 +291,113 @@ function ImapSection() {
   );
 }
 
+// ─── Monitoring Section ───────────────────────────────────────────────────────
+
+function MonitoringSection() {
+  const [walmartSkus, setWalmartSkus] = useState([]);
+  const [newSku, setNewSku] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadSkus();
+  }, []);
+
+  const loadSkus = async () => {
+    try {
+      const skus = await db.WalmartSkuWhitelist?.list?.() || [];
+      setWalmartSkus(skus);
+    } catch (err) {
+      console.error("Failed to load SKUs:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addSku = async () => {
+    const trimmed = newSku.trim().toUpperCase();
+    if (!trimmed) return;
+    
+    if (walmartSkus.some(s => s.sku === trimmed)) {
+      toast.error("SKU already in whitelist");
+      return;
+    }
+
+    try {
+      await db.WalmartSkuWhitelist?.create?.({ sku: trimmed, created_at: new Date().toISOString() });
+      setWalmartSkus(prev => [...prev, { sku: trimmed, created_at: new Date().toISOString() }]);
+      setNewSku("");
+      toast.success(`Added SKU: ${trimmed}`);
+    } catch (err) {
+      toast.error(`Failed to add SKU: ${err.message}`);
+    }
+  };
+
+  const removeSku = async (sku) => {
+    try {
+      await db.WalmartSkuWhitelist?.delete?.(sku);
+      setWalmartSkus(prev => prev.filter(s => s.sku !== sku));
+      toast.success(`Removed SKU: ${sku}`);
+    } catch (err) {
+      toast.error(`Failed to remove SKU: ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="border border-white/5 bg-[#08080f] rounded-sm p-5 space-y-3">
+        <h2 className="font-mono text-xs text-gray-400 uppercase tracking-wider">Walmart SKU Monitoring</h2>
+        <p className="text-[11px] font-mono text-gray-600">
+          Add Walmart SKUs to auto-trigger drop alerts for your monitored SKUs. When a Walmart alert drops matching any SKU in your whitelist, your configured task group will launch automatically.
+        </p>
+
+        {loading ? (
+          <div className="text-[11px] font-mono text-gray-500">Loading PIDs...</div>
+        ) : (
+          <>
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                value={newSku}
+                onChange={(e) => setNewSku(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addSku()}
+                placeholder="Enter SKU (e.g., 1234567890)"
+                className="bg-white/5 border-white/10 font-mono text-sm text-gray-100"
+              />
+              <Button onClick={addSku} className="bg-emerald-600 hover:bg-emerald-700 font-mono text-xs">
+                Add
+              </Button>
+            </div>
+
+            {walmartSkus.length === 0 ? (
+              <div className="text-[11px] font-mono text-gray-600 border border-white/5 bg-white/2 rounded px-3 py-2">
+                No SKUs whitelisted yet. Add one above to get started.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {walmartSkus.map((s) => (
+                  <div key={s.sku} className="flex items-center justify-between bg-white/5 border border-white/5 rounded px-3 py-2">
+                    <div className="flex-1">
+                      <div className="text-[11px] font-mono text-gray-200">{s.sku}</div>
+                      <div className="text-[9px] font-mono text-gray-600 mt-0.5">Added {new Date(s.created_at).toLocaleString()}</div>
+                    </div>
+                    <Button
+                      onClick={() => removeSku(s.sku)}
+                      variant="outline"
+                      className="border-white/10 text-gray-500 hover:text-red-400 font-mono text-xs h-7"
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── AI Section ───────────────────────────────────────────────────────────────
 
 const DEFAULT_GEMINI_KEY = "AQ.Ab8RN6LahkglZ7UiDjaF1JFEPeI0xfYpW5ET-U_nfi_i-Cyf_w";
@@ -380,7 +487,7 @@ function AISection() {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 
-const TABS = ["General", "IMAP", "AI", "About"];
+const TABS = ["General", "IMAP", "Monitoring", "AI", "About"];
 
 export default function Settings() {
   const [tab, setTab] = useState("General");
@@ -505,6 +612,8 @@ export default function Settings() {
       )}
 
       {tab === "IMAP" && <ImapSection />}
+
+      {tab === "Monitoring" && <MonitoringSection />}
 
       {tab === "AI" && <AISection />}
 
