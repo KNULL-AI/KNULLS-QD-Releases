@@ -93,38 +93,61 @@ function parseWalmartAlert(embeds) {
   return null;
 }
 
-// Send alert to trigger worker
-async function sendTriggerAlert(alert) {
-  try {
-    const payload = {
-      secret: TRIGGER_API.secret,
-      ...alert,
-    };
-
-    const response = await fetch(`${TRIGGER_API.base}/v1/global/trigger`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      console.error(`Trigger API error: ${response.status}`, await response.text());
-      return false;
-    }
-
-    console.log(`✅ Alert sent to worker:`, alert);
-    return true;
-  } catch (error) {
-    console.error('Error sending alert to worker:', error);
+// Send alert to trigger worker with retry logic
+async function sendTriggerAlert(alert, retries = 3) {
+  if (!TRIGGER_API.secret || !TRIGGER_API.base) {
+    console.error('❌ Trigger API not configured (missing secret or base URL)');
     return false;
   }
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const payload = {
+        secret: TRIGGER_API.secret,
+        ...alert,
+      };
+
+      const response = await fetch(`${TRIGGER_API.base}/v1/global/trigger`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        timeout: 10000,
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+      }
+
+      console.log(`✅ Alert sent to worker (attempt ${attempt}/${retries}):`, alert);
+      return true;
+    } catch (error) {
+      console.error(`❌ Alert send failed (attempt ${attempt}/${retries}):`, error?.message || error);
+      if (attempt < retries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // Exponential backoff
+        console.log(`   Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  console.error(`❌ Alert failed after ${retries} retries`);
+  return false;
 }
 
 client.on('ready', () => {
   console.log(`🤖 Bot logged in as ${client.user.tag}`);
   console.log(`📡 Monitoring channels:`, CHANNELS);
+});
+
+client.on('error', error => {
+  console.error('❌ Discord Client Error:', error);
+});
+
+client.on('warn', warning => {
+  console.warn('⚠️ Discord Client Warning:', warning);
 });
 
 client.on('messageCreate', async (message) => {
@@ -197,7 +220,15 @@ client.on('messageCreate', async (message) => {
   if (alert) {
     console.log(`\n🚨 Alert detected:`, JSON.stringify(alert, null, 2));
     await sendTriggerAlert(alert);
+  } else if (message.channelId === CHANNELS.POKEMON_CENTER || message.channelId === CHANNELS.WALMART || message.channelId === CHANNELS.COSTCO) {
+    console.warn(`⚠️  Message in monitored channel but no alert parsed:`, message.content.slice(0, 100));
   }
 });
 
-client.login(process.env.DISCORD_BOT_TOKEN);
+process.on('unhandledRejection', error => {
+  console.error('❌ Unhandled Promise Rejection:', error);
+});
+
+process.on('uncaughtException', error => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
