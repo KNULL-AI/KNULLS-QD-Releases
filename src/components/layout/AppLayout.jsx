@@ -7,7 +7,7 @@ const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
   { path: "/proxies", label: "Proxy Pool", icon: Shield },
   { path: "/sessions", label: "Sessions", icon: MonitorPlay },
-  { path: "/discord", label: "Global Triggers", icon: Radio },
+  { path: "/discord", label: "Monitoring", icon: Radio },
   { path: "/accounts", label: "Accounts", icon: Users },
   { path: "/task-groups", label: "Task Groups", icon: ListChecks },
   { path: "/captcha", label: "Captcha", icon: ShieldCheck },

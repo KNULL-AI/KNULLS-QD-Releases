@@ -487,7 +487,7 @@ function AISection() {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 
-const TABS = ["General", "IMAP", "Monitoring", "AI", "About"];
+const TABS = ["General", "IMAP", "SKU WatchList", "AI", "About"];
 
 export default function Settings() {
   const [tab, setTab] = useState("General");
@@ -613,7 +613,7 @@ export default function Settings() {
 
       {tab === "IMAP" && <ImapSection />}
 
-      {tab === "Monitoring" && <MonitoringSection />}
+      {tab === "SKU WatchList" && <MonitoringSection />}
 
       {tab === "AI" && <AISection />}
 
