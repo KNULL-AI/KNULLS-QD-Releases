@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Settings as SettingsIcon, Download, Upload, AlertTriangle, Check, Inbox, Mail, Play, Square, RefreshCw, Copy,
-  MailCheck, User, Brain, Eye, EyeOff
+  MailCheck, User
 } from "lucide-react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
@@ -398,96 +398,9 @@ function MonitoringSection() {
   );
 }
 
-// ─── AI Section ───────────────────────────────────────────────────────────────
-
-const DEFAULT_GEMINI_KEY = ""; // Moved to main.js environment variable
-
-function AISection() {
-  const [key, setKey] = useState("");
-  const [show, setShow] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [isCustom, setIsCustom] = useState(() => !!localStorage.getItem("gemini_api_key_override"));
-
-  useEffect(() => {
-    const stored = localStorage.getItem("gemini_api_key_override");
-    if (stored) setKey(stored);
-  }, []);
-
-  const handleSave = () => {
-    const trimmed = key.trim();
-    if (trimmed) {
-      localStorage.setItem("gemini_api_key_override", trimmed);
-      if (window.electronAPI?.setGeminiKey) window.electronAPI.setGeminiKey(trimmed);
-      setIsCustom(true);
-    } else {
-      localStorage.removeItem("gemini_api_key_override");
-      if (window.electronAPI?.setGeminiKey) window.electronAPI.setGeminiKey(DEFAULT_GEMINI_KEY);
-      setIsCustom(false);
-    }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-    toast.success(trimmed ? "Custom Gemini key saved" : "Reverted to default key");
-  };
-
-  const handleClear = () => {
-    setKey("");
-    localStorage.removeItem("gemini_api_key_override");
-    if (window.electronAPI?.setGeminiKey) window.electronAPI.setGeminiKey(DEFAULT_GEMINI_KEY);
-    setIsCustom(false);
-    toast.success("Reverted to default Gemini key");
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="border border-white/5 bg-[#08080f] rounded-sm p-5 space-y-4">
-        <div className="flex items-center gap-2">
-          <Brain className="w-4 h-4 text-violet-400" />
-          <h2 className="font-mono text-xs text-gray-400 uppercase tracking-wider">Gemini AI — Diagnostics Key</h2>
-          {isCustom
-            ? <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm bg-violet-500/10 border border-violet-500/20 text-violet-400">CUSTOM KEY</span>
-            : <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">DEFAULT KEY</span>
-          }
-        </div>
-        <p className="text-[11px] font-mono text-gray-600">
-          A default Gemini key is provided for AI log diagnostics. You can override it with your own key from{" "}
-          <span className="text-violet-400">aistudio.google.com</span> if you prefer.
-        </p>
-        <div className="space-y-2">
-          <Label className="text-xs text-gray-400 font-mono">Custom API Key (optional)</Label>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                type={show ? "text" : "password"}
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder="Paste your Gemini API key — leave blank to use the default"
-                className="bg-white/5 border-white/10 font-mono text-sm pr-9 text-gray-100"
-              />
-              <button
-                onClick={() => setShow((s) => !s)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
-              >
-                {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-            <Button onClick={handleSave} className="bg-violet-600 hover:bg-violet-700 font-mono text-xs gap-1.5">
-              {saved ? <><Check className="w-3.5 h-3.5" /> Saved</> : "Save"}
-            </Button>
-            {isCustom && (
-              <Button onClick={handleClear} variant="outline" className="border-white/10 text-gray-400 hover:text-red-400 font-mono text-xs">
-                Clear
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 
-const TABS = ["General", "IMAP", "SKU WatchList", "AI", "About"];
+const TABS = ["General", "IMAP", "SKU WatchList", "About"];
 
 export default function Settings() {
   const [tab, setTab] = useState("General");
@@ -614,8 +527,6 @@ export default function Settings() {
       {tab === "IMAP" && <ImapSection />}
 
       {tab === "SKU WatchList" && <MonitoringSection />}
-
-      {tab === "AI" && <AISection />}
 
       {tab === "About" && (
         <div className="border border-white/5 bg-[#08080f] rounded-sm p-5 space-y-2">
