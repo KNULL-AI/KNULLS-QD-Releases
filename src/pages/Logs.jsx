@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { db } from "@/lib/db";
 import { Trash2, RefreshCw, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import AIDiagnosticsPanel from "@/components/system-logs/AIDiagnosticsPanel";
 
 const LEVEL_STYLES = {
   info:  { dot: "bg-blue-400",    text: "text-blue-400",    label: "INFO"  },
@@ -67,9 +66,6 @@ export default function Logs() {
           </Button>
         </div>
       </div>
-
-      {/* AI Diagnostics */}
-      <AIDiagnosticsPanel logs={logs} />
 
       {/* Level filter */}
       <div className="flex gap-2 flex-wrap">

@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+﻿import { useEffect, useRef } from "react";
 import { db } from "@/lib/db";
+import { runTaskGroup } from "@/lib/taskGroupLauncher";
 import toast from "react-hot-toast";
 
 /**
  * Hook to listen for global trigger events from Discord bot
- * Automatically matches PIDs and launches task groups
+ * Automatically matches task groups by retailer name and launches them
  */
 export function useTriggerListener(authToken) {
   const wsRef = useRef(null);
@@ -49,7 +50,7 @@ export function useTriggerListener(authToken) {
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === "trigger") {
-              await handleTriggerEvent(msg.event);
+              await handleTriggerEvent(msg.event, skuWhitelistRef.current);
             }
           } catch (err) {
             console.error("[triggers] Failed to parse message:", err);
@@ -85,30 +86,29 @@ export function useTriggerListener(authToken) {
   return null;
 }
 
+const normalize = (s) => (s || '').toLowerCase().replace(/[-\s_]/g, '');
+
 /**
  * Handle incoming trigger event and auto-launch matching task group
  */
-async function handleTriggerEvent(event) {
+async function handleTriggerEvent(event, skuWhitelist) {
   const { retailer, url, urls, type } = event;
 
   console.log(`[triggers] Event: retailer=${retailer}, type=${type}`, { url, urls });
 
   try {
     if (retailer === "walmart" && urls && urls.length > 0) {
-      // Walmart: match URLs against whitelist
       for (const walmartUrl of urls) {
-        const matchedSku = extractAndMatchSku(walmartUrl);
+        const matchedSku = extractAndMatchSku(walmartUrl, skuWhitelist);
         if (matchedSku) {
           console.log(`[triggers] Matched Walmart SKU: ${matchedSku}`);
           await launchTaskGroup("walmart", walmartUrl);
         }
       }
     } else if (retailer === "pokemon-center") {
-      // Pokemon Center: any Queue or Security alert triggers
       console.log(`[triggers] Pokemon Center ${type} alert detected`);
       await launchTaskGroup("pokemon-center", null);
     } else if (retailer === "costco") {
-      // Costco: URL provided, just trigger
       console.log(`[triggers] Costco alert detected`);
       await launchTaskGroup("costco", url);
     }
@@ -119,21 +119,17 @@ async function handleTriggerEvent(event) {
 }
 
 /**
- * Extract SKU from Walmart URL and check whitelist
+ * Extract SKU from Walmart URL and check against whitelist
  */
-function extractAndMatchSku(url) {
-  if (!url || !skuWhitelistRef.current) return null;
+function extractAndMatchSku(url, skuWhitelist) {
+  if (!url || !skuWhitelist) return null;
 
   try {
-    // Try to extract SKU from various Walmart URL formats
-    // Common pattern: ?skuId=123456789 or /ip/123456789
     const skuMatch = url.match(/(?:skuId=|\/ip\/)(\d+)/);
     if (!skuMatch) return null;
 
     const sku = skuMatch[1];
-    if (skuWhitelistRef.current.has(sku)) {
-      return sku;
-    }
+    if (skuWhitelist.has(sku)) return sku;
   } catch (err) {
     console.error("[triggers] Error extracting SKU:", err);
   }
@@ -142,38 +138,33 @@ function extractAndMatchSku(url) {
 }
 
 /**
- * Launch task group with auto-filled URL
+ * Find the matching task group by retailer name and run it
  */
 async function launchTaskGroup(retailer, url) {
   try {
-    // Get configured task group for this retailer
     const taskGroups = await db.TaskGroup?.list?.() || [];
+    const normalizedRetailer = normalize(retailer);
     const matching = taskGroups.find(tg =>
-      tg.name?.toLowerCase().includes(retailer.toLowerCase())
+      normalize(tg.name).includes(normalizedRetailer) ||
+      normalize(tg.retailer).includes(normalizedRetailer)
     );
 
     if (!matching) {
       console.warn(`[triggers] No task group found for retailer: ${retailer}`);
-      toast.warning(`No task group configured for ${retailer}`);
+      toast(`No task group configured for ${retailer}`, { icon: '⚠️' });
       return;
     }
 
     console.log(`[triggers] Launching task group: ${matching.name}`, { url });
 
-    // If URL provided, update task group temporarily
-    if (url && matching.config?.target_url !== undefined) {
-      const updated = { ...matching, config: { ...matching.config, target_url: url } };
-      await db.TaskGroup?.update?.(matching.id, updated);
+    // For URL-based retailers, patch target_url before launching
+    const taskGroupToRun = url ? { ...matching, target_url: url } : matching;
+    if (url) {
+      await db.TaskGroup?.update?.(matching.id, taskGroupToRun);
     }
 
-    // Emit launch event that CaptchaSolver or main process can listen to
-    window.dispatchEvent(
-      new CustomEvent("triggerLaunchTaskGroup", {
-        detail: { taskGroupId: matching.id, url },
-      })
-    );
-
-    toast.success(`Launched: ${matching.name}`);
+    await runTaskGroup(taskGroupToRun);
+    toast.success(`[Trigger] Launched: ${matching.name}`);
   } catch (err) {
     console.error("[triggers] Failed to launch task group:", err);
     toast.error(`Failed to launch task group: ${err.message}`);

@@ -58,7 +58,7 @@ function initSchema(db) {
     "Proxy", "ProxyGroup", "BrowserSession", "TaskGroup",
     "DiscordMonitor", "SystemLog", "SessionProfile", "ActivityEvent",
     "WalmartAccount", "ImapConfig", "VerificationCode",
-    "WalmartDrop", "CaptchaConfig", "DiscordVerify"
+    "WalmartDrop", "CaptchaConfig", "DiscordVerify", "WalmartSkuWhitelist"
   ];
   tables.forEach((t) => {
     db.prepare(`CREATE TABLE IF NOT EXISTS "${t}" (
@@ -483,6 +483,15 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   // Save webContents ID before the window closes — accessing win.webContents
   // after "closed" throws "Object has been destroyed".
   const wcId = win.webContents?.id ?? null;
+
+  // Hide window on close button instead of destroying it (keeps task alive)
+  win.on("close", (event) => {
+    event.preventDefault();
+    win.hide();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("session-minimized", { sessionId });
+    }
+  });
 
   win.on("closed", () => {
     if (wcId != null && webContentsToSessionId.get(wcId) === sessionId) {
@@ -1772,4 +1781,22 @@ ipcMain.handle("window-maximize", () => {
 ipcMain.handle("window-close", () => {
   if (!mainWindow) return;
   confirmAndExit(mainWindow);
+});
+
+ipcMain.handle("show-browser-window", (_event, sessionId) => {
+  const win = browserWindows.get(sessionId);
+  if (win && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+  }
+});
+
+ipcMain.handle("focusBrowser", (_event, sessionId) => {
+  const win = browserWindows.get(sessionId);
+  if (win && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+    return { ok: true };
+  }
+  return { ok: false };
 });
