@@ -1,4 +1,21 @@
 require('dotenv').config();
+
+const originalEmitWarning = process.emitWarning.bind(process);
+
+process.emitWarning = function emitWarning(warning, ...args) {
+  const warningName = typeof warning === 'object' && warning ? warning.name : '';
+  const warningMessage = typeof warning === 'string' ? warning : warning?.message || '';
+
+  if (
+    warningName === 'DeprecationWarning' &&
+    warningMessage.includes('ready event has been renamed to clientReady')
+  ) {
+    return;
+  }
+
+  return originalEmitWarning(warning, ...args);
+};
+
 const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
 
 const client = new Client({
@@ -137,7 +154,7 @@ async function sendTriggerAlert(alert, retries = 3) {
   return false;
 }
 
-client.on('ready', () => {
+client.once('clientReady', () => {
   console.log(`🤖 Bot logged in as ${client.user.tag}`);
   console.log(`📡 Monitoring channels:`, CHANNELS);
 });
