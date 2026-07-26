@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { launchBrowser } from "@/lib/electronBridge";
+import { getRandomUserAgent } from "@/lib/userAgents";
 
 const LAUNCH_CACHE_TTL_MS = 3000;
 const launchCache = {
@@ -132,7 +133,7 @@ export async function runTaskGroup(taskGroup) {
         sessionId: session.id,
         url: launchUrl,
         proxy,
-        userAgent: taskGroup.user_agent || null,
+        userAgent: getRandomUserAgent(),
         browser: taskGroup.browser || "chrome",
         manualOpen: true,
         credentials: null,
@@ -161,7 +162,7 @@ export async function runTaskGroup(taskGroup) {
       proxy_label: proxy ? `${proxy.host}:${proxy.port}` : "No proxy",
       status: "running",
       rotation_mode: mode,
-      user_agent: taskGroup.user_agent || null,
+      user_agent: getRandomUserAgent(),
       browser: taskGroup.browser || "chrome",
       started_at: now,
     }))
@@ -172,7 +173,7 @@ export async function runTaskGroup(taskGroup) {
       sessionId: sessions[i].id,
       url: taskGroup.target_url,
       proxy: assignedProxies[i],
-      userAgent: taskGroup.user_agent || null,
+      userAgent: getRandomUserAgent(),
       browser: taskGroup.browser || "chrome",
     });
 

@@ -150,21 +150,31 @@ client.on('warn', warning => {
   console.warn('⚠️ Discord Client Warning:', warning);
 });
 
+// Extract embeds from a message, including forwarded message snapshots
+function getEmbeds(message) {
+  if (message.embeds?.length > 0) return message.embeds;
+  // Forwarded messages store the original embeds in messageSnapshots
+  const snapshot = message.messageSnapshots?.first?.();
+  if (snapshot?.embeds?.length > 0) return snapshot.embeds;
+  return [];
+}
+
 client.on('messageCreate', async (message) => {
   // Log ALL messages to debug
   console.log(`\n📨 Message received in channel ${message.channelId}:`, message.content.slice(0, 100));
   console.log(`   Author: ${message.author.tag}, isBot: ${message.author.bot}`);
   
-  // Ignore bot messages
+  // Ignore bot messages (allow forwarded messages from real users)
   if (message.author.bot) return;
 
+  const embeds = getEmbeds(message);
   let alert = null;
 
   // Check which channel the message came from
   if (message.channelId === CHANNELS.POKEMON_CENTER) {
-    // Try embeds first, then fallback to text for testing
-    if (message.embeds.length > 0) {
-      alert = parsePokemonCenterAlert(message.embeds);
+    // Try embeds first (including forwarded), then fallback to text for testing
+    if (embeds.length > 0) {
+      alert = parsePokemonCenterAlert(embeds);
     } else if (message.content.includes('Queue') || message.content.includes('Security')) {
       alert = {
         retailer: 'pokemon-center',
@@ -174,9 +184,9 @@ client.on('messageCreate', async (message) => {
       };
     }
   } else if (message.channelId === CHANNELS.WALMART) {
-    // Try embeds first, then fallback to text for testing
-    if (message.embeds.length > 0) {
-      alert = parseWalmartAlert(message.embeds);
+    // Try embeds first (including forwarded), then fallback to text for testing
+    if (embeds.length > 0) {
+      alert = parseWalmartAlert(embeds);
     } else {
       // Test mode: extract URLs from plain text
       const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -195,9 +205,9 @@ client.on('messageCreate', async (message) => {
       }
     }
   } else if (message.channelId === CHANNELS.COSTCO) {
-    // Try embeds first, then fallback to text for testing
-    if (message.embeds.length > 0) {
-      alert = parseCostcoAlert(message.embeds);
+    // Try embeds first (including forwarded), then fallback to text for testing
+    if (embeds.length > 0) {
+      alert = parseCostcoAlert(embeds);
     } else {
       // Test mode: extract URLs from plain text
       const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -232,3 +242,6 @@ process.on('unhandledRejection', error => {
 process.on('uncaughtException', error => {
   console.error('❌ Uncaught Exception:', error);
   process.exit(1);
+});
+
+client.login(process.env.DISCORD_BOT_TOKEN);
