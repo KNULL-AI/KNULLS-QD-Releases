@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-publish:
@@ -36,27 +36,18 @@ jobs:
             Write-Error "Tag $tagName does not match package.json version v$pkgVersion"
           }
 
-      - name: Verify publish token exists
-        shell: pwsh
-        env:
-          PUBLIC_RELEASES_TOKEN: ${{ secrets.PUBLIC_RELEASES_TOKEN }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:PUBLIC_RELEASES_TOKEN)) {
-            Write-Error "Missing repository secret PUBLIC_RELEASES_TOKEN"
-          }
-
       - name: Build and publish to public releases repo
         env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: npm run electron:build -- --publish always
 
       - name: Publish release and mark latest
         shell: pwsh
         env:
-          PUBLIC_RELEASES_TOKEN: ${{ secrets.PUBLIC_RELEASES_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $headers = @{
-            Authorization = "Bearer $env:PUBLIC_RELEASES_TOKEN"
+            Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept = "application/vnd.github+json"
             "User-Agent" = "knulls-qd-release-workflow"
           }
