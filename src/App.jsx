@@ -32,6 +32,14 @@ function appDebug(...args) {
   }
 }
 
+function normalizeRetailerKey(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  const compact = raw.replace(/[\s_]+/g, '-');
+  if (compact === 'pokemoncenter' || compact === 'pokemon-center') return 'pokemon-center';
+  return compact;
+}
+
 function AppContent() {
   const { isAuthenticated, authSession, getValidAccessToken } = useAuth();
   const taskGroupsByRetailerRef = useRef(new Map());
@@ -39,8 +47,12 @@ function AppContent() {
   const indexTaskGroups = (groups) => {
     const next = new Map();
     for (const group of Array.isArray(groups) ? groups : []) {
-      const retailer = String(group?.retailer || '').toLowerCase();
-      if (!retailer) continue;
+      const retailer = normalizeRetailerKey(group?.retailer || '');
+      if (!retailer) {
+        if (!next.has('__ungrouped__')) next.set('__ungrouped__', []);
+        next.get('__ungrouped__').push(group);
+        continue;
+      }
       if (!next.has(retailer)) next.set(retailer, []);
       next.get(retailer).push(group);
     }
@@ -112,7 +124,7 @@ function AppContent() {
           }
         },
         onTrigger: async (event, ack) => {
-          const retailer = String(event?.retailer || event?.type || '').toLowerCase();
+          const retailer = normalizeRetailerKey(event?.retailer || event?.type || '');
           if (!retailer) {
             ack('ignored', 'Missing retailer/type');
             return;
@@ -122,6 +134,12 @@ function AppContent() {
           if (!matching.length) {
             const indexed = await refreshTaskGroupIndex();
             matching = indexed.get(retailer) || [];
+          }
+          if (!matching.length && (retailer === 'pokemon-center' || retailer === 'costco')) {
+            const ungrouped = taskGroupsByRetailerRef.current.get('__ungrouped__') || [];
+            if (ungrouped.length === 1) {
+              matching = [ungrouped[0]];
+            }
           }
           if (!matching.length) {
             ack('ignored', `No local task groups for ${retailer}`);
