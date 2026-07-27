@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.21 - 2026-07-27
+
+### Highlights
+- Fixed activation failure on packaged builds when `VITE_TRIGGER_API_BASE` is missing at build time.
+
+### Stability and Behavior
+- Activation now falls back to the production trigger API endpoint (`https://knull-activation.sloanbrack.workers.dev`) when no build-time API base is injected.
+- Removes the "Activation server not configured. Set VITE_TRIGGER_API_BASE." blocker for end users on fresh installs.
+
 ## 1.0.20 - 2026-07-27
 
 ### Highlights

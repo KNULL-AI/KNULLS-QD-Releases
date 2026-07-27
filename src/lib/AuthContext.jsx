@@ -2,7 +2,8 @@ import React, { createContext, useState, useContext, useEffect } from 'react';
 import { getDeviceId } from '@/lib/electronBridge';
 
 const SESSION_KEY = 'knull_activation_session_v1';
-const API_BASE = import.meta.env.VITE_TRIGGER_API_BASE || '';
+const DEFAULT_TRIGGER_API_BASE = 'https://knull-activation.sloanbrack.workers.dev';
+const API_BASE = (import.meta.env.VITE_TRIGGER_API_BASE || DEFAULT_TRIGGER_API_BASE).trim();
 const DEFAULT_WS_URL = import.meta.env.VITE_TRIGGER_WS_URL || '';
 const ALLOW_LOCAL_MOCK = String(import.meta.env.VITE_ALLOW_LOCAL_ACTIVATION || '').toLowerCase() === 'true';
 const FORCE_ACTIVATION = String(import.meta.env.VITE_FORCE_ACTIVATION || '').toLowerCase() === 'true';
@@ -103,12 +104,6 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(true);
       saveSession(localSession);
       return { ok: true, local: true };
-    }
-
-    if (!API_BASE) {
-      const message = 'Activation server not configured. Set VITE_TRIGGER_API_BASE.';
-      setAuthError(message);
-      return { ok: false, error: message };
     }
 
     try {
