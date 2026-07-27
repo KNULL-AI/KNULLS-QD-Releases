@@ -53,11 +53,14 @@ function inferRetailerKey(group) {
 
   const url = String(group?.target_url || '').toLowerCase();
   const name = String(group?.name || '').toLowerCase();
-  const hint = `${name} ${url}`;
+  const hintRaw = `${name} ${url}`;
+  const hintCompact = hintRaw.replace(/[^a-z0-9]+/g, '');
 
-  if (hint.includes('pokemoncenter') || hint.includes('pokemon-center')) return 'pokemon-center';
-  if (hint.includes('costco')) return 'costco';
-  if (hint.includes('walmart')) return 'walmart';
+  if (hintRaw.includes('pokemon-center') || hintRaw.includes('pokemon center') || hintCompact.includes('pokemoncenter')) {
+    return 'pokemon-center';
+  }
+  if (hintRaw.includes('costco') || hintCompact.includes('costco')) return 'costco';
+  if (hintRaw.includes('walmart') || hintCompact.includes('walmart')) return 'walmart';
   return '';
 }
 
@@ -195,6 +198,14 @@ function AppContent() {
             return;
           }
 
+          appDebug('[trigger-bus] trigger received:', {
+            retailer,
+            trigger_id: event?.trigger_id || null,
+            source_message_id: event?.source_message_id || null,
+            url: event?.url || null,
+            type: event?.type || null,
+          });
+
           let matching = taskGroupsByRetailerRef.current.get(retailer) || [];
           if (!matching.length) {
             const indexed = await refreshTaskGroupIndex();
@@ -206,14 +217,37 @@ function AppContent() {
           }
 
           let launchedCount = 0;
-          for (const group of matching) {
-            let nextGroup = group;
-            if (event.url && (retailer === 'walmart' || retailer === 'costco')) {
-              await db.TaskGroup.update(group.id, { target_url: event.url });
-              nextGroup = { ...group, target_url: event.url };
-              group.target_url = event.url;
+          try {
+            for (const group of matching) {
+              let nextGroup = group;
+              if (event.url && (retailer === 'walmart' || retailer === 'costco')) {
+                await db.TaskGroup.update(group.id, { target_url: event.url });
+                nextGroup = { ...group, target_url: event.url };
+                group.target_url = event.url;
+              }
+
+              appDebug('[trigger-bus] launching task group:', {
+                group_id: group.id,
+                name: group.name,
+                retailer: group.retailer,
+                target_url: nextGroup.target_url,
+                instance_count: nextGroup.instance_count,
+                account_ids: Array.isArray(nextGroup.account_ids) ? nextGroup.account_ids.length : 0,
+              });
+
+              const launched = await runTaskGroup(nextGroup);
+              launchedCount += launched;
+              appDebug('[trigger-bus] launch complete:', {
+                group_id: group.id,
+                launched,
+                total_launched: launchedCount,
+              });
             }
-            launchedCount += await runTaskGroup(nextGroup);
+          } catch (error) {
+            console.error('[trigger-bus] launch failed:', error);
+            toast.error(`Launch failed: ${error?.message || 'unknown error'}`);
+            ack('error', error?.message || 'Trigger handling failed');
+            return;
           }
 
           toast.success(`[Bus] ${retailer} trigger launched ${launchedCount} instance${launchedCount !== 1 ? 's' : ''}`);

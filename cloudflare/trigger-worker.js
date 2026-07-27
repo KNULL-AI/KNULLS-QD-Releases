@@ -15,6 +15,11 @@ const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
 const ADMIN_ACCESS_TTL_SECONDS = 30 * 60;
 const ADMIN_REFRESH_TTL_SECONDS = 7 * 24 * 60 * 60;
+const TRIGGER_EVENT_DEDUPE_WINDOW_MS = 12000;
+
+function isTriggerDebugEnabled(env) {
+  return String(env?.TRIGGER_DEBUG_LOGS || "false").trim().toLowerCase() === "true";
+}
 
 export default {
   async fetch(request, env) {
@@ -107,12 +112,34 @@ export default {
 
       if (path === "/v1/global/trigger" && request.method === "POST") {
         const body = await readJson(request);
-        return json(await emitGlobalTrigger(env, body), 200, cors);
+        return json(await emitGlobalTrigger(env, body, request), 200, cors);
       }
 
       return json({ error: "Not found" }, 404, cors);
     } catch (error) {
       const status = error?.status || 500;
+      try {
+        const reqUrl = request?.url ? new URL(request.url) : null;
+        if (reqUrl?.pathname === "/v1/global/trigger") {
+          const sourceIp = request?.headers?.get("CF-Connecting-IP")
+            || request?.headers?.get("x-forwarded-for")
+            || null;
+          const userAgent = request?.headers?.get("user-agent") || null;
+          const cfRay = request?.headers?.get("CF-Ray") || null;
+          const country = request?.cf?.country || null;
+          console.warn("[global-trigger] rejected", JSON.stringify({
+            ts: new Date().toISOString(),
+            status,
+            error: error?.message || "Internal error",
+            source_ip: sourceIp,
+            country,
+            user_agent: userAgent,
+            cf_ray: cfRay,
+          }));
+        }
+      } catch {
+        // Never fail the request due to logging issues.
+      }
       return json({ error: error?.message || "Internal error" }, status, cors);
     }
   },
@@ -481,6 +508,7 @@ async function connectTriggerSocket(env, request, url) {
   const connectUrl = new URL("https://trigger-bus/v1/connect");
   connectUrl.searchParams.set("key_id", session.keyId);
   connectUrl.searchParams.set("device_id", session.deviceId);
+  connectUrl.searchParams.set("debug", isTriggerDebugEnabled(env) ? "1" : "0");
 
   return room.fetch(new Request(connectUrl.toString(), {
     method: "GET",
@@ -555,7 +583,7 @@ async function emitUserTestTrigger(env, user, body) {
   };
 }
 
-async function emitGlobalTrigger(env, body) {
+async function emitGlobalTrigger(env, body, request) {
   const secret = String(body?.secret || "").trim();
   const expected = String(env.GLOBAL_TRIGGER_SECRET || "").trim();
   
@@ -568,12 +596,62 @@ async function emitGlobalTrigger(env, body) {
   const type = String(body?.type || "").trim().toLowerCase() || null;
   const incomingTriggerId = String(body?.trigger_id || "").trim() || null;
   const sourceMessageId = String(body?.source_message_id || "").trim() || null;
+  const senderId = String(body?.sender_id || "").trim() || "unknown";
+  const strictIngress = String(env.STRICT_GLOBAL_TRIGGER_INGRESS || "true").trim().toLowerCase() !== "false";
+  const allowedSenders = String(env.ALLOWED_TRIGGER_SENDERS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   if (!retailer || (retailer === "walmart" && urls.length === 0) || (retailer !== "walmart" && !url && !type)) {
     throw httpError(400, "Missing required fields for retailer");
   }
 
+  if (strictIngress) {
+    if (!senderId || senderId === "unknown") {
+      throw httpError(403, "sender_id is required");
+    }
+    if (allowedSenders.length > 0 && !allowedSenders.includes(senderId)) {
+      throw httpError(403, "sender_id is not allowed");
+    }
+    if (!sourceMessageId) {
+      throw httpError(403, "source_message_id is required");
+    }
+    if (!incomingTriggerId) {
+      throw httpError(403, "trigger_id is required");
+    }
+    const sourceIdPattern = new RegExp(`:${sourceMessageId}(?::|$)`);
+    if (!sourceIdPattern.test(incomingTriggerId)) {
+      throw httpError(403, "trigger_id must include source_message_id");
+    }
+  }
+
   const nowIso = new Date().toISOString();
+  const emitBatchId = String(body?.emit_batch_id || "").trim() || crypto.randomUUID();
+  const walmartFanoutEnabled = String(env.WALMART_TRIGGER_FANOUT || "false").trim().toLowerCase() === "true";
+  const sourceIp = request?.headers?.get("CF-Connecting-IP")
+    || request?.headers?.get("x-forwarded-for")
+    || null;
+  const userAgent = request?.headers?.get("user-agent") || null;
+  const cfRay = request?.headers?.get("CF-Ray") || null;
+  const country = request?.cf?.country || null;
+
+  if (isTriggerDebugEnabled(env)) {
+    console.log("[global-trigger] ingress", JSON.stringify({
+      ts: nowIso,
+      source_ip: sourceIp,
+      country,
+      user_agent: userAgent,
+      cf_ray: cfRay,
+      sender_id: senderId,
+      retailer,
+      type,
+      source_message_id: sourceMessageId,
+      trigger_id: incomingTriggerId,
+      emit_batch_id: emitBatchId,
+      urls_count: urls.length,
+    }));
+  }
 
   // Log to drop history for tracking
   const dropHistoryId = crypto.randomUUID();
@@ -594,31 +672,68 @@ async function emitGlobalTrigger(env, body) {
   const events = [];
 
   if (retailer === "walmart" && urls.length > 0) {
-    for (let i = 0; i < urls.length; i++) {
-      const walmartUrl = urls[i];
+    const normalizedUrls = Array.from(new Set(urls
+      .map((u) => String(u || "").trim())
+      .filter(Boolean)));
+
+    if (!walmartFanoutEnabled) {
+      const primaryUrl = normalizedUrls[0] || null;
       events.push({
         event_id: crypto.randomUUID(),
-        trigger_id: incomingTriggerId ? `${incomingTriggerId}:${i}` : `discord:walmart:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`,
+        trigger_id: incomingTriggerId
+          || (sourceMessageId ? `discord:walmart:${sourceMessageId}` : `discord:walmart:${Date.now()}`),
         retailer: "walmart",
-        url: walmartUrl,
+        url: primaryUrl,
         detected_at: nowIso,
         ttl_seconds: 30,
         source: "discord-global",
+        sender_id: senderId,
         source_message_id: sourceMessageId || null,
+        emit_batch_id: emitBatchId,
+        emit_index: 0,
+        source_url_count: normalizedUrls.length,
       });
+    } else {
+      for (let i = 0; i < normalizedUrls.length; i++) {
+        const walmartUrl = normalizedUrls[i];
+        events.push({
+          event_id: crypto.randomUUID(),
+          trigger_id: incomingTriggerId ? `${incomingTriggerId}:${i}` : `discord:walmart:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`,
+          retailer: "walmart",
+          url: walmartUrl,
+          detected_at: nowIso,
+          ttl_seconds: 30,
+          source: "discord-global",
+          sender_id: senderId,
+          source_message_id: sourceMessageId || null,
+          emit_batch_id: emitBatchId,
+          emit_index: i,
+          source_url_count: normalizedUrls.length,
+        });
+      }
     }
   } else {
     events.push({
       event_id: crypto.randomUUID(),
-      trigger_id: incomingTriggerId || `discord:${retailer}:${type || ""}:${Date.now()}`,
+      trigger_id: incomingTriggerId
+        || (sourceMessageId
+          ? `discord:${retailer}:${sourceMessageId}:${type || "event"}`
+          : `discord:${retailer}:${type || ""}:${Date.now()}`),
       retailer,
       url: url || null,
       type: type || null,
       detected_at: nowIso,
       ttl_seconds: 30,
       source: "discord-global",
+      sender_id: senderId,
       source_message_id: sourceMessageId || null,
+      emit_batch_id: emitBatchId,
+      emit_index: 0,
     });
+  }
+
+  for (let i = 0; i < events.length; i++) {
+    events[i].emit_total = events.length;
   }
 
   // Broadcast all events
@@ -638,6 +753,11 @@ async function emitGlobalTrigger(env, body) {
   return {
     ok: true,
     retailer,
+    source_ip: sourceIp,
+    sender_id_received: senderId,
+    emit_batch_id: emitBatchId,
+    walmart_fanout_enabled: walmartFanoutEnabled,
+    urls_received: retailer === "walmart" ? urls.length : 0,
     events_emitted: events.length,
     clients_triggered: totalDelivered,
     timestamp: nowIso,
@@ -845,7 +965,38 @@ export class TriggerBusRoom {
   constructor(state) {
     this.state = state;
     this.clients = new Set();
+    this.clientMeta = new Map();
     this.lastEmitAt = null;
+    this.recentEventKeys = new Map();
+  }
+
+  makeEventDedupeKey(event) {
+    const sourceMessageId = String(event?.source_message_id || "").trim();
+    const retailer = String(event?.retailer || "").trim().toLowerCase();
+    const type = String(event?.type || "").trim().toLowerCase();
+    const title = String(event?.title || "").trim().toLowerCase();
+    const url = String(event?.url || "").trim().toLowerCase();
+
+    if (sourceMessageId) {
+      return `msg:${retailer}:${sourceMessageId}:${type || title || url || "event"}`;
+    }
+
+    const triggerId = String(event?.trigger_id || "").trim();
+    if (triggerId && !/^discord:[^:]+:[^:]*:\d{13}(?::|$)/.test(triggerId)) {
+      return `trigger:${triggerId}`;
+    }
+
+    if (!retailer) return "";
+    // Fallback IDs can include timestamps; use semantic fingerprint to suppress near-simultaneous duplicates.
+    return `fp:${retailer}:${type || ""}:${title || ""}:${url || ""}`;
+  }
+
+  pruneRecentEventKeys(nowMs) {
+    for (const [key, ts] of this.recentEventKeys.entries()) {
+      if (nowMs - ts > TRIGGER_EVENT_DEDUPE_WINDOW_MS) {
+        this.recentEventKeys.delete(key);
+      }
+    }
   }
 
   async fetch(request) {
@@ -857,20 +1008,44 @@ export class TriggerBusRoom {
         return new Response("Expected websocket", { status: 426 });
       }
 
+      const keyId = String(url.searchParams.get("key_id") || "").trim() || "unknown-key";
+      const deviceId = String(url.searchParams.get("device_id") || "").trim() || "unknown-device";
+      const debugAcks = String(url.searchParams.get("debug") || "0") === "1";
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
       server.accept();
 
       this.clients.add(server);
+      this.clientMeta.set(server, { key_id: keyId, device_id: deviceId, debug_acks: debugAcks, connected_at: new Date().toISOString() });
       server.addEventListener("close", () => {
         this.clients.delete(server);
+        this.clientMeta.delete(server);
       });
       server.addEventListener("error", () => {
         this.clients.delete(server);
+        this.clientMeta.delete(server);
       });
-      server.addEventListener("message", () => {
-        // Clients can send ack payloads; they are optional for this bus room.
+      server.addEventListener("message", (evt) => {
+        const meta = this.clientMeta.get(server) || { key_id: "unknown-key", device_id: "unknown-device" };
+        let payload = null;
+        try {
+          payload = JSON.parse(evt?.data || "{}");
+        } catch {
+          return;
+        }
+
+        if (payload?.type === "ack" && meta?.debug_acks) {
+          console.log("[trigger-bus] client ack", JSON.stringify({
+            ts: new Date().toISOString(),
+            key_id: meta.key_id,
+            device_id: meta.device_id,
+            event_id: payload?.event_id || null,
+            trigger_id: payload?.trigger_id || null,
+            status: payload?.status || null,
+            detail: payload?.detail || null,
+          }));
+        }
       });
       server.send(JSON.stringify({
         type: "info",
@@ -886,6 +1061,24 @@ export class TriggerBusRoom {
       const event = body?.event;
       if (!event || typeof event !== "object") {
         return json({ error: "Missing event payload" }, 400);
+      }
+
+      const nowMs = Date.now();
+      this.pruneRecentEventKeys(nowMs);
+      const dedupeKey = this.makeEventDedupeKey(event);
+      if (dedupeKey) {
+        const prev = this.recentEventKeys.get(dedupeKey);
+        if (prev && (nowMs - prev) <= TRIGGER_EVENT_DEDUPE_WINDOW_MS) {
+          return json({
+            ok: true,
+            delivered: 0,
+            deduped: true,
+            dedupe_key: dedupeKey,
+            dedupe_window_ms: TRIGGER_EVENT_DEDUPE_WINDOW_MS,
+            last_emit_at: this.lastEmitAt,
+          }, 200);
+        }
+        this.recentEventKeys.set(dedupeKey, nowMs);
       }
 
       const payload = JSON.stringify({ type: "trigger", event });

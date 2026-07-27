@@ -397,6 +397,7 @@ const DEBUG_SESSION_DEVTOOLS = process.env.KNULL_DEBUG_SESSION_DEVTOOLS === "1";
 
 // ── IPC: launch a task BrowserWindow ─────────────────────────────────────────
 ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAgent, browser, profile, noPreload = false, manualOpen = false, credentials = null, partitionKey = null }) => {
+  mainDebug(`[knull] launch-browser requested session=${sessionId} manualOpen=${manualOpen} url=${url}`);
   // Close existing window for this session if any
   if (browserWindows.has(sessionId)) {
     const existing = browserWindows.get(sessionId);
@@ -477,6 +478,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
       webSecurity: true,
     },
   });
+  mainDebug(`[knull] BrowserWindow created session=${sessionId} webContentsId=${win.webContents?.id ?? 'n/a'}`);
 
   // Block new-window popups that could steal focus/session
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -679,6 +681,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   }
 
   win.loadURL(url);
+  mainDebug(`[knull] loadURL issued session=${sessionId}`);
 
   browserWindows.set(sessionId, win);
   if (win.webContents?.id != null) {
@@ -701,6 +704,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
       launchedAt: new Date().toISOString(),
     });
   }
+  mainDebug(`[knull] launch-browser finished session=${sessionId}`);
   updateTray();
   return { ok: true };
 });
