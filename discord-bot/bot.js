@@ -1,4 +1,5 @@
 require('dotenv').config();
+const os = require('os');
 
 const originalEmitWarning = process.emitWarning.bind(process);
 
@@ -36,6 +37,9 @@ const TRIGGER_API = {
   base: process.env.TRIGGER_API_BASE,
   secret: process.env.TRIGGER_API_SECRET,
 };
+
+const BOT_SENDER_ID = String(process.env.DISCORD_BOT_SENDER_ID || '').trim()
+  || `${os.hostname()}:${process.pid}`;
 
 const ALERT_DEDUPE_WINDOW_MS = Number(process.env.ALERT_DEDUPE_WINDOW_MS || 10000);
 const recentAlertFingerprints = new Map();
@@ -86,6 +90,8 @@ function attachTriggerIdentity(message, alert) {
 
   return {
     ...alert,
+    sender_id: BOT_SENDER_ID,
+    emit_batch_id: `discord-msg:${sourceMessageId}`,
     source_message_id: sourceMessageId,
     trigger_id: `discord:${message.channelId}:${sourceMessageId}:${alert.retailer}:${identityPart}`,
   };
@@ -152,11 +158,13 @@ function parseWalmartAlert(embeds) {
     urls.push(match[2]);
   }
 
-  if (title && urls.length > 0) {
+  const uniqueUrls = Array.from(new Set(urls.map((u) => String(u || '').trim()).filter(Boolean)));
+
+  if (title && uniqueUrls.length > 0) {
     return {
       retailer: 'walmart',
       title,
-      urls, // Multiple URLs for Walmart
+      urls: uniqueUrls, // Worker decides single vs multi emit
       timestamp: new Date().toISOString(),
     };
   }
@@ -192,7 +200,17 @@ async function sendTriggerAlert(alert, retries = 3) {
         throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
       }
 
+      const body = await response.json().catch(() => ({}));
+
       botDebug(`✅ Alert sent to worker (attempt ${attempt}/${retries}):`, alert);
+      botDebug('   Worker response:', {
+        ok: body?.ok,
+        sender_id_received: body?.sender_id_received,
+        emit_batch_id: body?.emit_batch_id,
+        events_emitted: body?.events_emitted,
+        clients_triggered: body?.clients_triggered,
+        timestamp: body?.timestamp,
+      });
       return true;
     } catch (error) {
       console.error(`❌ Alert send failed (attempt ${attempt}/${retries}):`, error?.message || error);
@@ -233,6 +251,7 @@ function getEmbeds(message) {
 client.on('messageCreate', async (message) => {
   botDebug(`\n📨 Message received in channel ${message.channelId}:`, message.content.slice(0, 100));
   botDebug(`   Author: ${message.author.tag}, isBot: ${message.author.bot}`);
+  botDebug(`   Message ID: ${message.id}, Created: ${new Date(message.createdTimestamp).toISOString()}`);
   
   // Ignore bot messages (allow forwarded messages from real users)
   if (message.author.bot) return;
@@ -299,6 +318,7 @@ client.on('messageCreate', async (message) => {
 
   if (alert) {
     alert = attachTriggerIdentity(message, alert);
+    botDebug(`   Computed trigger_id: ${alert.trigger_id}`);
     if (shouldSuppressDuplicateAlert(message.channelId, alert)) {
       botDebug('⏭️ Duplicate alert suppressed within dedupe window:', alert.retailer, alert.type || alert.title || alert.url || 'n/a');
       return;
