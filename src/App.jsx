@@ -65,6 +65,12 @@ function AppContent() {
   const { isAuthenticated, authSession, getValidAccessToken } = useAuth();
   const taskGroupsByRetailerRef = useRef(new Map());
   const recentTriggerFingerprintsRef = useRef(new Map());
+  const getValidAccessTokenRef = useRef(getValidAccessToken);
+  const activeBusStopRef = useRef(null);
+
+  useEffect(() => {
+    getValidAccessTokenRef.current = getValidAccessToken;
+  }, [getValidAccessToken]);
 
   const shouldSuppressBurstTrigger = (event, retailer) => {
     const now = Date.now();
@@ -153,8 +159,18 @@ function AppContent() {
       const wsUrl = authSession?.ws_url || FALLBACK_TRIGGER_WS_URL;
       if (!wsUrl) return;
 
-      const accessToken = await getValidAccessToken();
+      const accessToken = await getValidAccessTokenRef.current();
       if (!accessToken || cancelled) return;
+
+      // Ensure only one live trigger-bus subscription exists in this renderer.
+      if (activeBusStopRef.current) {
+        try {
+          activeBusStopRef.current();
+        } catch {
+          // Ignore teardown race from a stale effect pass.
+        }
+        activeBusStopRef.current = null;
+      }
 
       stopBus = connectTriggerBus({
         wsUrl,
@@ -204,6 +220,8 @@ function AppContent() {
           ack('ok', `launched:${launchedCount}`);
         },
       });
+
+      activeBusStopRef.current = stopBus;
     };
 
     startBus();
@@ -212,8 +230,11 @@ function AppContent() {
       cancelled = true;
       if (stopTaskGroupSub) stopTaskGroupSub();
       if (stopBus) stopBus();
+      if (activeBusStopRef.current === stopBus) {
+        activeBusStopRef.current = null;
+      }
     };
-  }, [isAuthenticated, authSession?.ws_url, getValidAccessToken]);
+  }, [isAuthenticated, authSession?.ws_url]);
 
   return (
     <QueryClientProvider client={queryClientInstance}>

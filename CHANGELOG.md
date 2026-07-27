@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.26 - 2026-07-27
+
+### Highlights
+- Fixed duplicate global-trigger launches where one ping could fan out into multiple local sessions.
+
+### Stability and Behavior
+- Added renderer-side burst dedupe for near-identical trigger payloads.
+- Enforced single active trigger-bus subscription per renderer to prevent accidental parallel listeners.
+- Added deterministic Discord message-based trigger IDs through bot -> worker pipeline for stronger cross-instance dedupe.
+
 ## 1.0.25 - 2026-07-27
 
 ### Highlights
