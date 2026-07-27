@@ -2,6 +2,19 @@
 
 This guide is for end users running the desktop app from public releases.
 
+## Quick Start (2-Minute Setup)
+
+1. Download the latest release for your OS from KNULLS-QD-Releases.
+2. Install and launch the app.
+3. Enter your user activation key on the Activation screen.
+4. In Proxy Pool, add proxies and run a health check.
+5. In Accounts, add the accounts you plan to run.
+6. In Task Groups, create at least one group with retailer + URL.
+7. In Sessions, launch one test session to confirm everything works.
+8. Optional: enable Discord Monitor and IMAP in Settings when ready.
+
+If anything fails in setup, go to Logs first and review the latest errors.
+
 ## What This App Is
 
 KNULL Queue Destroyer is an Electron desktop app for managing:
