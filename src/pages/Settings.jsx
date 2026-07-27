@@ -475,10 +475,10 @@ export default function Settings() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 border-b border-white/5 pb-0">
+      <div className="flex gap-1 border-b border-white/5 pb-0 overflow-x-auto">
         {TABS.map((t) => (
           <button key={t} onClick={() => setTab(t)}
-            className={`px-3 py-1.5 font-mono text-xs rounded-t-sm border-b-2 transition-all -mb-px ${tab === t ? "border-emerald-400 text-emerald-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>
+            className={`px-3 py-1.5 font-mono text-xs rounded-t-sm border-b-2 transition-all -mb-px whitespace-nowrap ${tab === t ? "border-emerald-400 text-emerald-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>
             {t}
           </button>
         ))}

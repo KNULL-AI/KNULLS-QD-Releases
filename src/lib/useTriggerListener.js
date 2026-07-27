@@ -3,6 +3,14 @@ import { db } from "@/lib/db";
 import { runTaskGroup } from "@/lib/taskGroupLauncher";
 import toast from "react-hot-toast";
 
+const VERBOSE_TRIGGER_LOGS = import.meta.env.DEV || String(import.meta.env.VITE_VERBOSE_TRIGGER_LOGS || "").toLowerCase() === "true";
+
+function triggerDebug(...args) {
+  if (VERBOSE_TRIGGER_LOGS) {
+    console.log(...args);
+  }
+}
+
 /**
  * Hook to listen for global trigger events from Discord bot
  * Automatically matches task groups by retailer name and launches them
@@ -43,7 +51,7 @@ export function useTriggerListener(authToken) {
         const ws = new WebSocket(wsUrl.toString());
 
         ws.addEventListener("open", () => {
-          console.log("[triggers] WebSocket connected");
+          triggerDebug("[triggers] WebSocket connected");
         });
 
         ws.addEventListener("message", async (event) => {
@@ -58,7 +66,7 @@ export function useTriggerListener(authToken) {
         });
 
         ws.addEventListener("close", () => {
-          console.log("[triggers] WebSocket closed, reconnecting in 5s...");
+          triggerDebug("[triggers] WebSocket closed, reconnecting in 5s...");
           setTimeout(() => connectWebSocket(), 5000);
         });
 
@@ -94,22 +102,22 @@ const normalize = (s) => (s || '').toLowerCase().replace(/[-\s_]/g, '');
 async function handleTriggerEvent(event, skuWhitelist) {
   const { retailer, url, urls, type } = event;
 
-  console.log(`[triggers] Event: retailer=${retailer}, type=${type}`, { url, urls });
+  triggerDebug(`[triggers] Event: retailer=${retailer}, type=${type}`, { url, urls });
 
   try {
     if (retailer === "walmart" && urls && urls.length > 0) {
       for (const walmartUrl of urls) {
         const matchedSku = extractAndMatchSku(walmartUrl, skuWhitelist);
         if (matchedSku) {
-          console.log(`[triggers] Matched Walmart SKU: ${matchedSku}`);
+          triggerDebug(`[triggers] Matched Walmart SKU: ${matchedSku}`);
           await launchTaskGroup("walmart", walmartUrl);
         }
       }
     } else if (retailer === "pokemon-center") {
-      console.log(`[triggers] Pokemon Center ${type} alert detected`);
+      triggerDebug(`[triggers] Pokemon Center ${type} alert detected`);
       await launchTaskGroup("pokemon-center", null);
     } else if (retailer === "costco") {
-      console.log(`[triggers] Costco alert detected`);
+      triggerDebug(`[triggers] Costco alert detected`);
       await launchTaskGroup("costco", url);
     }
   } catch (err) {
@@ -155,7 +163,7 @@ async function launchTaskGroup(retailer, url) {
       return;
     }
 
-    console.log(`[triggers] Launching task group: ${matching.name}`, { url });
+    triggerDebug(`[triggers] Launching task group: ${matching.name}`, { url });
 
     // For URL-based retailers, patch target_url before launching
     const taskGroupToRun = url ? { ...matching, target_url: url } : matching;

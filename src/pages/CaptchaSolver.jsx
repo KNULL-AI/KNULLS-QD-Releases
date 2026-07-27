@@ -1085,10 +1085,10 @@ export default function CaptchaSolver() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <h1 className="font-mono text-xl text-gray-100">Harvesters</h1>
-          <span className="text-gray-500 font-mono text-sm">({harvesters.length})</span>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="font-mono text-lg font-semibold text-gray-100">Captcha Harvesters</h1>
+          <span className="text-gray-500 font-mono text-xs">({harvesters.length})</span>
           <Dialog open={dialogOpen} onOpenChange={(open) => {
             setDialogOpen(open);
             if (!open) setEditing(null);
@@ -1114,7 +1114,7 @@ export default function CaptchaSolver() {
           </Dialog>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button onClick={() => setAllOpenState(false)} variant="outline" className="h-8 border-white/10 text-gray-300 font-mono text-xs">Close All</Button>
           <Button onClick={() => setAllOpenState(true)} className="h-8 bg-blue-600 hover:bg-blue-700 text-white font-mono text-xs">Open All</Button>
           <Button onClick={deleteAll} className="h-8 bg-red-500 hover:bg-red-600 text-white font-mono text-xs gap-1.5">

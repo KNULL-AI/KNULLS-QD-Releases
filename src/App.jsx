@@ -25,6 +25,14 @@ import { connectTriggerBus } from '@/lib/triggerBus';
 import { prewarmTaskLaunchPath, runTaskGroup } from '@/lib/taskGroupLauncher';
 import { useTriggerListener } from '@/lib/useTriggerListener';
 
+const VERBOSE_APP_LOGS = import.meta.env.DEV || String(import.meta.env.VITE_VERBOSE_APP_LOGS || '').toLowerCase() === 'true';
+
+function appDebug(...args) {
+  if (VERBOSE_APP_LOGS) {
+    console.log(...args);
+  }
+}
+
 function AppContent() {
   const { isAuthenticated, authSession, getValidAccessToken } = useAuth();
   const taskGroupsByRetailerRef = useRef(new Map());
@@ -49,23 +57,23 @@ function AppContent() {
   // Global IMAP poll listener — persists across page navigation and routes
   // so the user sees real-time verification code updates no matter which page they're on
   useEffect(() => {
-    console.log("[knull-app] setting up global IMAP poll listener");
+    appDebug("[knull-app] setting up global IMAP poll listener");
     const wrapper = onImapPollEvent((evt) => {
-      console.log("[knull-app] received imap-poll-event:", evt.type, evt);
+      appDebug("[knull-app] received imap-poll-event:", evt.type, evt);
       if (evt.type === "error") {
         toast.error(`IMAP: ${evt.error}`, { duration: 4000 });
         return;
       }
       if (evt.type === "result") {
         if (evt.newCodes?.length) {
-          console.log("[knull-app] showing toast for", evt.newCodes.length, "new codes");
+          appDebug("[knull-app] showing toast for", evt.newCodes.length, "new codes");
           toast.success(`${evt.newCodes.length} new verification code${evt.newCodes.length !== 1 ? "s" : ""}`);
         }
       }
     });
     // Never clean up this listener — it should stay active for the lifetime of the app
     return () => {
-      console.log("[knull-app] removing global IMAP poll listener");
+      appDebug("[knull-app] removing global IMAP poll listener");
       offImapPollEvent(wrapper);
     };
   }, []);
@@ -98,10 +106,10 @@ function AppContent() {
         accessToken,
         onStatus: (status) => {
           if (status === 'connected') {
-            console.log('[trigger-bus] connected');
+            appDebug('[trigger-bus] connected');
           }
           if (status === 'reconnecting') {
-            console.log('[trigger-bus] reconnecting');
+            appDebug('[trigger-bus] reconnecting');
           }
         },
         onTrigger: async (event, ack) => {

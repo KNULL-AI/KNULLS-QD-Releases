@@ -37,6 +37,14 @@ const TRIGGER_API = {
   secret: process.env.TRIGGER_API_SECRET,
 };
 
+const VERBOSE_BOT_LOGS = String(process.env.DISCORD_BOT_VERBOSE || "").toLowerCase() === "1" || String(process.env.DISCORD_BOT_VERBOSE || "").toLowerCase() === "true";
+
+function botDebug(...args) {
+  if (VERBOSE_BOT_LOGS) {
+    console.log(...args);
+  }
+}
+
 // Parse Pokemon Center alerts
 function parsePokemonCenterAlert(embeds) {
   if (!embeds.length) return null;
@@ -138,13 +146,13 @@ async function sendTriggerAlert(alert, retries = 3) {
         throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
       }
 
-      console.log(`✅ Alert sent to worker (attempt ${attempt}/${retries}):`, alert);
+      botDebug(`✅ Alert sent to worker (attempt ${attempt}/${retries}):`, alert);
       return true;
     } catch (error) {
       console.error(`❌ Alert send failed (attempt ${attempt}/${retries}):`, error?.message || error);
       if (attempt < retries) {
         const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // Exponential backoff
-        console.log(`   Retrying in ${delay}ms...`);
+        botDebug(`   Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -155,8 +163,8 @@ async function sendTriggerAlert(alert, retries = 3) {
 }
 
 client.once('clientReady', () => {
-  console.log(`🤖 Bot logged in as ${client.user.tag}`);
-  console.log(`📡 Monitoring channels:`, CHANNELS);
+  botDebug(`🤖 Bot logged in as ${client.user.tag}`);
+  botDebug(`📡 Monitoring channels:`, CHANNELS);
 });
 
 client.on('error', error => {
@@ -177,9 +185,8 @@ function getEmbeds(message) {
 }
 
 client.on('messageCreate', async (message) => {
-  // Log ALL messages to debug
-  console.log(`\n📨 Message received in channel ${message.channelId}:`, message.content.slice(0, 100));
-  console.log(`   Author: ${message.author.tag}, isBot: ${message.author.bot}`);
+  botDebug(`\n📨 Message received in channel ${message.channelId}:`, message.content.slice(0, 100));
+  botDebug(`   Author: ${message.author.tag}, isBot: ${message.author.bot}`);
   
   // Ignore bot messages (allow forwarded messages from real users)
   if (message.author.bot) return;
@@ -248,7 +255,7 @@ client.on('messageCreate', async (message) => {
     console.log(`\n🚨 Alert detected:`, JSON.stringify(alert, null, 2));
     await sendTriggerAlert(alert);
   } else if (message.channelId === CHANNELS.POKEMON_CENTER || message.channelId === CHANNELS.WALMART || message.channelId === CHANNELS.COSTCO) {
-    console.warn(`⚠️  Message in monitored channel but no alert parsed:`, message.content.slice(0, 100));
+    botDebug(`⚠️  Message in monitored channel but no alert parsed:`, message.content.slice(0, 100));
   }
 });
 
