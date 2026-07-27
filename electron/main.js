@@ -1673,7 +1673,7 @@ function setupAutoUpdater() {
     setUpdaterStatus({
       phase: "downloaded",
       version: info?.version || null,
-      message: `Update ${info?.version || "new"} is downloaded and ready to install.",
+      message: `Update ${info?.version || "new"} is downloaded and ready to install.`,
       percent: 100,
       bytesPerSecond: 0,
     });
@@ -1690,7 +1690,7 @@ function setupAutoUpdater() {
       setUpdaterStatus({
         phase: "downloaded",
         version: pending.version,
-        message: `Update ${pending.version} is already downloaded and ready to install.",
+        message: `Update ${pending.version} is already downloaded and ready to install.`,
         percent: 100,
         bytesPerSecond: 0,
       });
@@ -1720,7 +1720,7 @@ ipcMain.handle("check-for-updates-manual", async () => {
     setUpdaterStatus({
       phase: "downloaded",
       version: pending.version,
-      message: `Update ${pending.version} is already downloaded and ready to install.",
+      message: `Update ${pending.version} is already downloaded and ready to install.`,
       percent: 100,
       bytesPerSecond: 0,
     });

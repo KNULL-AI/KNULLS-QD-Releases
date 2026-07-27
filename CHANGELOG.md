@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.24 - 2026-07-27
+
+### Highlights
+- Fixed packaging pipeline syntax regression in updater status messaging.
+
+### Stability and Behavior
+- Corrected malformed template string quotes in `electron/main.js` updater messages that caused bytecode compile failure during CI builds.
+- Restores successful Windows/macOS artifact packaging for the release workflow.
+
 ## 1.0.23 - 2026-07-27
 
 ### Highlights
