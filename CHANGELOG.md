@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.23 - 2026-07-27
+
+### Highlights
+- Fixed activation endpoint fallback to target the current v1 trigger-auth worker.
+
+### Stability and Behavior
+- Updated default `VITE_TRIGGER_API_BASE` fallback from the legacy action-based worker host to `https://knull-trigger-auth.sloanbrack.workers.dev`.
+- Resolves "Unknown action" during license activation on packaged builds when no build-time API base is injected.
+
 ## 1.0.22 - 2026-07-27
 
 ### Highlights
