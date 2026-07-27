@@ -114,6 +114,44 @@ jobs:
         with:
           path: release-assets
 
+      - name: Ensure latest.yml asset path exists
+        shell: bash
+        run: |
+          LATEST_FILE="$(find release-assets -type f -name latest.yml | head -n 1)"
+          if [ -z "${LATEST_FILE}" ]; then
+            echo "No latest.yml found in downloaded artifacts."
+            exit 1
+          fi
+
+          WIN_DIR="$(dirname "${LATEST_FILE}")"
+          EXPECTED_PATH="$(awk '/^path:/{print $2; exit}' "${LATEST_FILE}")"
+
+          if [ -z "${EXPECTED_PATH}" ]; then
+            echo "Could not parse Windows path from latest.yml"
+            exit 1
+          fi
+
+          if [ ! -f "${WIN_DIR}/${EXPECTED_PATH}" ]; then
+            DOTTED_CANDIDATE="${EXPECTED_PATH//-/.}"
+            if [ -f "${WIN_DIR}/${DOTTED_CANDIDATE}" ]; then
+              cp "${WIN_DIR}/${DOTTED_CANDIDATE}" "${WIN_DIR}/${EXPECTED_PATH}"
+              echo "Created alias: ${EXPECTED_PATH} <- ${DOTTED_CANDIDATE}"
+            else
+              echo "Missing expected Windows asset '${EXPECTED_PATH}' and dotted fallback '${DOTTED_CANDIDATE}'."
+              exit 1
+            fi
+          fi
+
+          if [ ! -f "${WIN_DIR}/${EXPECTED_PATH}.blockmap" ]; then
+            DOTTED_BLOCKMAP="${EXPECTED_PATH//-/.}.blockmap"
+            if [ -f "${WIN_DIR}/${DOTTED_BLOCKMAP}" ]; then
+              cp "${WIN_DIR}/${DOTTED_BLOCKMAP}" "${WIN_DIR}/${EXPECTED_PATH}.blockmap"
+              echo "Created alias: ${EXPECTED_PATH}.blockmap <- ${DOTTED_BLOCKMAP}"
+            else
+              echo "Warning: blockmap alias not created (missing ${EXPECTED_PATH}.blockmap and ${DOTTED_BLOCKMAP})"
+            fi
+          fi
+
       - name: Create or update public release metadata
         shell: bash
         run: |
