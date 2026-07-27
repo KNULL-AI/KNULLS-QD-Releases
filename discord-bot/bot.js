@@ -74,6 +74,23 @@ function shouldSuppressDuplicateAlert(channelId, alert) {
   return false;
 }
 
+function attachTriggerIdentity(message, alert) {
+  const sourceMessageId = String(message?.id || '').trim();
+  if (!sourceMessageId) return alert;
+
+  const identityPart = String(alert?.type || alert?.title || alert?.url || 'event')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'event';
+
+  return {
+    ...alert,
+    source_message_id: sourceMessageId,
+    trigger_id: `discord:${message.channelId}:${sourceMessageId}:${alert.retailer}:${identityPart}`,
+  };
+}
+
 // Parse Pokemon Center alerts
 function parsePokemonCenterAlert(embeds) {
   if (!embeds.length) return null;
@@ -281,6 +298,7 @@ client.on('messageCreate', async (message) => {
   }
 
   if (alert) {
+    alert = attachTriggerIdentity(message, alert);
     if (shouldSuppressDuplicateAlert(message.channelId, alert)) {
       botDebug('⏭️ Duplicate alert suppressed within dedupe window:', alert.retailer, alert.type || alert.title || alert.url || 'n/a');
       return;

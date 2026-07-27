@@ -566,6 +566,8 @@ async function emitGlobalTrigger(env, body) {
   const urls = body?.urls ? (Array.isArray(body.urls) ? body.urls : [body.urls]) : [];
   const url = String(body?.url || "").trim() || null;
   const type = String(body?.type || "").trim().toLowerCase() || null;
+  const incomingTriggerId = String(body?.trigger_id || "").trim() || null;
+  const sourceMessageId = String(body?.source_message_id || "").trim() || null;
 
   if (!retailer || (retailer === "walmart" && urls.length === 0) || (retailer !== "walmart" && !url && !type)) {
     throw httpError(400, "Missing required fields for retailer");
@@ -592,27 +594,30 @@ async function emitGlobalTrigger(env, body) {
   const events = [];
 
   if (retailer === "walmart" && urls.length > 0) {
-    for (const walmartUrl of urls) {
+    for (let i = 0; i < urls.length; i++) {
+      const walmartUrl = urls[i];
       events.push({
         event_id: crypto.randomUUID(),
-        trigger_id: `discord:walmart:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`,
+        trigger_id: incomingTriggerId ? `${incomingTriggerId}:${i}` : `discord:walmart:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`,
         retailer: "walmart",
         url: walmartUrl,
         detected_at: nowIso,
         ttl_seconds: 30,
         source: "discord-global",
+        source_message_id: sourceMessageId || null,
       });
     }
   } else {
     events.push({
       event_id: crypto.randomUUID(),
-      trigger_id: `discord:${retailer}:${type || ""}:${Date.now()}`,
+      trigger_id: incomingTriggerId || `discord:${retailer}:${type || ""}:${Date.now()}`,
       retailer,
       url: url || null,
       type: type || null,
       detected_at: nowIso,
       ttl_seconds: 30,
       source: "discord-global",
+      source_message_id: sourceMessageId || null,
     });
   }
 

@@ -25,6 +25,7 @@ import { connectTriggerBus } from '@/lib/triggerBus';
 import { prewarmTaskLaunchPath, runTaskGroup } from '@/lib/taskGroupLauncher';
 
 const VERBOSE_APP_LOGS = import.meta.env.DEV || String(import.meta.env.VITE_VERBOSE_APP_LOGS || '').toLowerCase() === 'true';
+const TRIGGER_BURST_DEDUPE_MS = Number(import.meta.env.VITE_TRIGGER_BURST_DEDUPE_MS || 12000);
 const FALLBACK_TRIGGER_WS_URL = (
   import.meta.env.VITE_TRIGGER_WS_URL
   || import.meta.env.VITE_TRIGGER_API_BASE
@@ -63,6 +64,33 @@ function inferRetailerKey(group) {
 function AppContent() {
   const { isAuthenticated, authSession, getValidAccessToken } = useAuth();
   const taskGroupsByRetailerRef = useRef(new Map());
+  const recentTriggerFingerprintsRef = useRef(new Map());
+
+  const shouldSuppressBurstTrigger = (event, retailer) => {
+    const now = Date.now();
+    const seen = recentTriggerFingerprintsRef.current;
+
+    for (const [key, ts] of seen.entries()) {
+      if (now - ts > TRIGGER_BURST_DEDUPE_MS) {
+        seen.delete(key);
+      }
+    }
+
+    const fingerprint = [
+      retailer,
+      String(event?.type || '').toLowerCase(),
+      String(event?.title || '').toLowerCase(),
+      String(event?.url || '').toLowerCase(),
+    ].join('::');
+
+    const prev = seen.get(fingerprint);
+    if (prev && (now - prev) <= TRIGGER_BURST_DEDUPE_MS) {
+      return true;
+    }
+
+    seen.set(fingerprint, now);
+    return false;
+  };
 
   const indexTaskGroups = (groups) => {
     const next = new Map();
@@ -143,6 +171,11 @@ function AppContent() {
           const retailer = normalizeRetailerKey(event?.retailer || event?.type || '');
           if (!retailer) {
             ack('ignored', 'Missing retailer/type');
+            return;
+          }
+
+          if (shouldSuppressBurstTrigger(event, retailer)) {
+            ack('ignored', 'Duplicate trigger suppressed');
             return;
           }
 
