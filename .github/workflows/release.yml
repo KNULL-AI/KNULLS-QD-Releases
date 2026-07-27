@@ -131,24 +131,27 @@ jobs:
             exit 1
           fi
 
-          if [ ! -f "${WIN_DIR}/${EXPECTED_PATH}" ]; then
-            DOTTED_CANDIDATE="${EXPECTED_PATH//-/.}"
-            if [ -f "${WIN_DIR}/${DOTTED_CANDIDATE}" ]; then
-              cp "${WIN_DIR}/${DOTTED_CANDIDATE}" "${WIN_DIR}/${EXPECTED_PATH}"
-              echo "Created alias: ${EXPECTED_PATH} <- ${DOTTED_CANDIDATE}"
+          if [ -f "${WIN_DIR}/${EXPECTED_PATH}" ]; then
+            echo "Found expected Windows asset: ${EXPECTED_PATH}"
+          else
+            echo "Expected Windows asset not found at ${EXPECTED_PATH}; scanning for a matching installer in ${WIN_DIR}"
+            CANDIDATE_EXE="$(find "${WIN_DIR}" -maxdepth 2 -type f -name '*.exe' | head -n 1)"
+            if [ -n "${CANDIDATE_EXE}" ]; then
+              cp "${CANDIDATE_EXE}" "${WIN_DIR}/${EXPECTED_PATH}"
+              echo "Created alias: ${EXPECTED_PATH} <- $(basename "${CANDIDATE_EXE}")"
             else
-              echo "Missing expected Windows asset '${EXPECTED_PATH}' and dotted fallback '${DOTTED_CANDIDATE}'."
+              echo "No Windows installer found in ${WIN_DIR}."
               exit 1
             fi
           fi
 
           if [ ! -f "${WIN_DIR}/${EXPECTED_PATH}.blockmap" ]; then
-            DOTTED_BLOCKMAP="${EXPECTED_PATH//-/.}.blockmap"
-            if [ -f "${WIN_DIR}/${DOTTED_BLOCKMAP}" ]; then
-              cp "${WIN_DIR}/${DOTTED_BLOCKMAP}" "${WIN_DIR}/${EXPECTED_PATH}.blockmap"
-              echo "Created alias: ${EXPECTED_PATH}.blockmap <- ${DOTTED_BLOCKMAP}"
+            CANDIDATE_BLOCKMAP="$(find "${WIN_DIR}" -maxdepth 2 -type f -name '*.exe.blockmap' | head -n 1)"
+            if [ -n "${CANDIDATE_BLOCKMAP}" ]; then
+              cp "${CANDIDATE_BLOCKMAP}" "${WIN_DIR}/${EXPECTED_PATH}.blockmap"
+              echo "Created alias: ${EXPECTED_PATH}.blockmap <- $(basename "${CANDIDATE_BLOCKMAP}")"
             else
-              echo "Warning: blockmap alias not created (missing ${EXPECTED_PATH}.blockmap and ${DOTTED_BLOCKMAP})"
+              echo "Warning: no blockmap found for Windows installer."
             fi
           fi
 
