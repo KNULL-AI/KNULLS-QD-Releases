@@ -41,11 +41,13 @@
       "!KNULL/**/*"
     ],
     "npmRebuild": true,
+    "icon": "electron/icon.png",
     "win": {
       "target": "nsis",
       "icon": "electron/icon.ico"
     },
     "mac": {
+      "icon": "electron/icon.png",
       "target": [
         "dmg",
         "zip"
