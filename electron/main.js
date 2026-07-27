@@ -35,6 +35,9 @@ const _httpAgent  = new http.Agent({  keepAlive: true, maxSockets: 32, keepAlive
 
 const CHROME_FULL_VERSION = process.versions.chrome || "131.0.0.0";
 const VERBOSE_MAIN_LOGS = !app.isPackaged || String(process.env.KNULL_VERBOSE_MAIN_LOGS || "").toLowerCase() === "1" || String(process.env.KNULL_VERBOSE_MAIN_LOGS || "").toLowerCase() === "true";
+const WINDOWS_APP_ID = "com.knull.queuedestroyer";
+const WINDOWS_ICON_PATH = path.join(__dirname, "icon.ico");
+const WINDOWS_ICON = process.platform === "win32" && fs.existsSync(WINDOWS_ICON_PATH) ? WINDOWS_ICON_PATH : undefined;
 
 function mainDebug(...args) {
   if (VERBOSE_MAIN_LOGS) {
@@ -463,6 +466,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     width,
     height,
     title: `KNULL — Session ${sessionId}`,
+    icon: WINDOWS_ICON,
     show: manualOpen, // hidden by default until user explicitly takes control
     webPreferences: {
       session: ses,
@@ -716,6 +720,7 @@ ipcMain.handle("discord-oauth-login", async (_event, { cfEndpoint }) => {
       width: 500,
       height: 700,
       title: "Login with Discord",
+      icon: WINDOWS_ICON,
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
 
@@ -1378,6 +1383,7 @@ function createWindow() {
     backgroundColor: "#0a0a0f",
     titleBarStyle: "hidden",
     frame: false,
+    icon: WINDOWS_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -1665,6 +1671,9 @@ ipcMain.handle("get-app-version", () => ({
 }));
 
 app.whenReady().then(() => {
+  if (process.platform === "win32") {
+    app.setAppUserModelId(WINDOWS_APP_ID);
+  }
   createWindow();
   createTray();
   setupAutoUpdater();
