@@ -13,7 +13,9 @@
     "electron": "cross-env NODE_ENV=development electron .",
     "build:bytecode": "node scripts/compile-bytecode.cjs",
     "build:integrity": "node scripts/generate-integrity-manifest.cjs",
-    "electron:build": "vite build && npm run build:bytecode && npm run build:integrity && electron-builder --win",
+    "electron:build": "npm run electron:build:win",
+    "electron:build:win": "vite build && npm run build:bytecode && npm run build:integrity && electron-builder --win",
+    "electron:build:mac": "vite build && npm run build:bytecode && npm run build:integrity && electron-builder --mac dmg zip",
     "clean:dist": "node -e \"const fs=require('fs'); if (fs.existsSync('dist')) fs.rmSync('dist', { recursive: true, force: true }); console.log('dist cleaned');\"",
     "electron:release": "npm run clean:dist && npm run electron:build",
     "release:patch": "npm version patch --no-git-tag-version && npm run electron:release",
@@ -42,6 +44,13 @@
     "win": {
       "target": "nsis",
       "icon": "electron/icon.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities"
     },
     "nsis": {
       "oneClick": false,
