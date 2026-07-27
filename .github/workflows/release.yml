@@ -9,8 +9,16 @@ permissions:
   contents: write
 
 jobs:
-  publish-windows:
-    runs-on: windows-latest
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            build_script: electron:build:win
+          - os: macos-latest
+            build_script: electron:build:mac
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,4 +35,4 @@ jobs:
       - name: Build and publish installer to main repo
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run electron:build -- --publish always
+        run: npm run ${{ matrix.build_script }} -- --publish always
