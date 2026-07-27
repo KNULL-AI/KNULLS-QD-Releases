@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import toast from "react-hot-toast";
-import { checkForUpdatesManual, getAppVersion, imapFetch, injectVerificationCode, startImapPoll, stopImapPoll, getImapPollStatus, onImapPollEvent, offImapPollEvent } from "@/lib/electronBridge";
+import { checkForUpdatesManual, getAppVersion, getUpdateStatus, onUpdateStatus, offUpdateStatus, imapFetch, injectVerificationCode, startImapPoll, stopImapPoll, getImapPollStatus, onImapPollEvent, offImapPollEvent } from "@/lib/electronBridge";
 
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 
@@ -402,6 +402,37 @@ function MonitoringSection() {
 
 const TABS = ["General", "IMAP", "SKU WatchList", "About"];
 
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = n;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function describeUpdateStatus(status) {
+  const phase = status?.phase || "idle";
+  if (phase === "checking") return "Checking for updates...";
+  if (phase === "available") return status?.message || "Update found. Preparing download...";
+  if (phase === "downloading") {
+    const pct = Number(status?.percent || 0);
+    const speed = formatBytes(status?.bytesPerSecond || 0);
+    const transferred = formatBytes(status?.transferred || 0);
+    const total = formatBytes(status?.total || 0);
+    return `Downloading ${status?.version || "update"}: ${pct.toFixed(1)}% (${transferred}/${total}) at ${speed}/s`;
+  }
+  if (phase === "downloaded") return status?.message || `Update ${status?.version || ""} downloaded and ready to install.`;
+  if (phase === "up-to-date") return "You are already on the latest version.";
+  if (phase === "error") return status?.message || "Updater error.";
+  if (phase === "disabled") return "Updater is disabled in development mode.";
+  return "Idle";
+}
+
 export default function Settings() {
   const [tab, setTab] = useState("General");
   const [importing, setImporting] = useState(false);
@@ -409,6 +440,8 @@ export default function Settings() {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installedVersion, setInstalledVersion] = useState(APP_VERSION);
   const [isPackagedApp, setIsPackagedApp] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState({ phase: "idle", percent: 0 });
+  const lastPhaseRef = useRef("");
 
   useEffect(() => {
     let alive = true;
@@ -421,6 +454,37 @@ export default function Settings() {
       .catch(() => {});
     return () => {
       alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    getUpdateStatus()
+      .then((res) => {
+        if (!alive || !res?.ok) return;
+        setUpdateStatus(res);
+        lastPhaseRef.current = res.phase || "";
+      })
+      .catch(() => {});
+
+    const wrapper = onUpdateStatus((next) => {
+      if (!alive || !next) return;
+      const prevPhase = lastPhaseRef.current;
+      lastPhaseRef.current = next.phase || "";
+      setUpdateStatus(next);
+
+      if (next.phase === "downloaded" && prevPhase !== "downloaded") {
+        toast.success(next.message || `Update ${next.version || ""} downloaded and ready to install.`, { duration: 5000 });
+      }
+      if (next.phase === "error" && prevPhase !== "error") {
+        toast.error(next.message || "Updater error.", { duration: 5000 });
+      }
+    });
+
+    return () => {
+      alive = false;
+      offUpdateStatus(wrapper);
     };
   }, []);
 
@@ -497,6 +561,17 @@ export default function Settings() {
                 {checkingUpdates ? "Checking..." : "Check for Updates"}
               </Button>
               <span className="text-[10px] font-mono text-gray-600">Installed version: {installedVersion} {isPackagedApp ? "(packaged)" : "(dev)"}</span>
+            </div>
+            <div className="space-y-2">
+              <p className="text-[10px] font-mono text-gray-500">Updater status: {describeUpdateStatus(updateStatus)}</p>
+              {updateStatus?.phase === "downloading" && (
+                <div className="w-full h-2 rounded bg-white/10 overflow-hidden border border-white/10">
+                  <div
+                    className="h-full bg-blue-500 transition-all duration-300"
+                    style={{ width: `${Math.max(0, Math.min(100, Number(updateStatus?.percent || 0)))}%` }}
+                  />
+                </div>
+              )}
             </div>
           </div>
 

@@ -78,6 +78,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Window controls
   checkForUpdatesManual: () => ipcRenderer.invoke("check-for-updates-manual"),
+  getUpdateStatus: () => ipcRenderer.invoke("get-update-status"),
+  onUpdateStatus: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("update-status", wrapper); return wrapper; },
+  offUpdateStatus: (wrapper) => ipcRenderer.removeListener("update-status", wrapper),
   windowMinimize: () => ipcRenderer.invoke("window-minimize"),
   windowMaximize: () => ipcRenderer.invoke("window-maximize"),
   windowClose: () => ipcRenderer.invoke("window-close"),
