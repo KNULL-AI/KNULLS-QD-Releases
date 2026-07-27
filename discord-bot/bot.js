@@ -37,12 +37,41 @@ const TRIGGER_API = {
   secret: process.env.TRIGGER_API_SECRET,
 };
 
+const ALERT_DEDUPE_WINDOW_MS = Number(process.env.ALERT_DEDUPE_WINDOW_MS || 10000);
+const recentAlertFingerprints = new Map();
+
 const VERBOSE_BOT_LOGS = String(process.env.DISCORD_BOT_VERBOSE || "").toLowerCase() === "1" || String(process.env.DISCORD_BOT_VERBOSE || "").toLowerCase() === "true";
 
 function botDebug(...args) {
   if (VERBOSE_BOT_LOGS) {
     console.log(...args);
   }
+}
+
+function shouldSuppressDuplicateAlert(channelId, alert) {
+  const now = Date.now();
+  for (const [key, ts] of recentAlertFingerprints.entries()) {
+    if (now - ts > ALERT_DEDUPE_WINDOW_MS) {
+      recentAlertFingerprints.delete(key);
+    }
+  }
+
+  const urls = Array.isArray(alert?.urls) ? [...alert.urls].sort().join('|') : '';
+  const fingerprint = [
+    String(channelId || ''),
+    String(alert?.retailer || ''),
+    String(alert?.type || ''),
+    String(alert?.title || ''),
+    String(alert?.url || ''),
+    urls,
+  ].join('::');
+
+  const lastTs = recentAlertFingerprints.get(fingerprint);
+  if (lastTs && (now - lastTs) <= ALERT_DEDUPE_WINDOW_MS) {
+    return true;
+  }
+  recentAlertFingerprints.set(fingerprint, now);
+  return false;
 }
 
 // Parse Pokemon Center alerts
@@ -252,6 +281,10 @@ client.on('messageCreate', async (message) => {
   }
 
   if (alert) {
+    if (shouldSuppressDuplicateAlert(message.channelId, alert)) {
+      botDebug('⏭️ Duplicate alert suppressed within dedupe window:', alert.retailer, alert.type || alert.title || alert.url || 'n/a');
+      return;
+    }
     console.log(`\n🚨 Alert detected:`, JSON.stringify(alert, null, 2));
     await sendTriggerAlert(alert);
   } else if (message.channelId === CHANNELS.POKEMON_CENTER || message.channelId === CHANNELS.WALMART || message.channelId === CHANNELS.COSTCO) {
