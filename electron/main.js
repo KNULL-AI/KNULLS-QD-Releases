@@ -1540,6 +1540,29 @@ function clearPendingUpdate() {
   } catch (_) {}
 }
 
+let updaterStatus = {
+  phase: "idle",
+  message: "Idle",
+  version: null,
+  percent: 0,
+  bytesPerSecond: 0,
+  transferred: 0,
+  total: 0,
+  updatedAt: new Date().toISOString(),
+};
+
+function setUpdaterStatus(patch = {}) {
+  updaterStatus = {
+    ...updaterStatus,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("update-status", updaterStatus);
+  }
+}
+
 async function promptInstallDownloadedUpdate(version) {
   const safeVersion = String(version || "new");
   try {
@@ -1566,6 +1589,14 @@ async function promptInstallDownloadedUpdate(version) {
 function setupAutoUpdater() {
   if (!app.isPackaged) {
     mainDebug("[knull] Auto-updater disabled in development mode");
+    setUpdaterStatus({
+      phase: "disabled",
+      message: "Updater is disabled in development mode.",
+      percent: 0,
+      bytesPerSecond: 0,
+      transferred: 0,
+      total: 0,
+    });
     return;
   }
 
@@ -1574,10 +1605,27 @@ function setupAutoUpdater() {
 
   autoUpdater.on("checking-for-update", () => {
     mainDebug("[knull] Checking for app updates...");
+    setUpdaterStatus({
+      phase: "checking",
+      message: "Checking for updates...",
+      percent: 0,
+      bytesPerSecond: 0,
+      transferred: 0,
+      total: 0,
+    });
   });
 
   autoUpdater.on("update-available", (info) => {
     mainDebug(`[knull] Update available: ${info?.version || "unknown"}`);
+    setUpdaterStatus({
+      phase: "available",
+      version: info?.version || null,
+      message: `Update ${info?.version || "new"} found. Downloading in background...`,
+      percent: 0,
+      bytesPerSecond: 0,
+      transferred: 0,
+      total: 0,
+    });
     dialog.showMessageBox(mainWindow || null, {
       type: "info",
       title: "Update Available",
@@ -1586,17 +1634,49 @@ function setupAutoUpdater() {
     }).catch(() => {});
   });
 
+  autoUpdater.on("download-progress", (progress) => {
+    setUpdaterStatus({
+      phase: "downloading",
+      message: "Downloading update...",
+      percent: Number(progress?.percent || 0),
+      bytesPerSecond: Number(progress?.bytesPerSecond || 0),
+      transferred: Number(progress?.transferred || 0),
+      total: Number(progress?.total || 0),
+    });
+  });
+
   autoUpdater.on("update-not-available", () => {
     mainDebug("[knull] App is up to date");
+    setUpdaterStatus({
+      phase: "up-to-date",
+      version: app.getVersion(),
+      message: "You are already on the latest version.",
+      percent: 100,
+      bytesPerSecond: 0,
+      transferred: 0,
+      total: 0,
+    });
   });
 
   autoUpdater.on("error", (err) => {
     console.error("[knull] Auto-updater error:", err?.message || err);
+    setUpdaterStatus({
+      phase: "error",
+      message: err?.message || "Updater error",
+      bytesPerSecond: 0,
+    });
   });
 
   autoUpdater.on("update-downloaded", async (info) => {
     mainDebug(`[knull] Update downloaded: ${info?.version || "unknown"}`);
     savePendingUpdate(info);
+    setUpdaterStatus({
+      phase: "downloaded",
+      version: info?.version || null,
+      message: `Update ${info?.version || "new"} is downloaded and ready to install.",
+      percent: 100,
+      bytesPerSecond: 0,
+    });
     await promptInstallDownloadedUpdate(info?.version);
   });
 
@@ -1607,6 +1687,13 @@ function setupAutoUpdater() {
     if (compareVersion(pending.version, app.getVersion()) <= 0) {
       clearPendingUpdate();
     } else {
+      setUpdaterStatus({
+        phase: "downloaded",
+        version: pending.version,
+        message: `Update ${pending.version} is already downloaded and ready to install.",
+        percent: 100,
+        bytesPerSecond: 0,
+      });
       setTimeout(() => {
         promptInstallDownloadedUpdate(pending.version).catch(() => {});
       }, 1500);
@@ -1615,6 +1702,11 @@ function setupAutoUpdater() {
 
   autoUpdater.checkForUpdates().catch((e) => {
     console.error("[knull] checkForUpdates failed:", e?.message || e);
+    setUpdaterStatus({
+      phase: "error",
+      message: e?.message || "Failed to check for updates.",
+      bytesPerSecond: 0,
+    });
   });
 }
 
@@ -1625,6 +1717,13 @@ ipcMain.handle("check-for-updates-manual", async () => {
 
   const pending = loadPendingUpdate();
   if (pending?.version && compareVersion(pending.version, app.getVersion()) > 0) {
+    setUpdaterStatus({
+      phase: "downloaded",
+      version: pending.version,
+      message: `Update ${pending.version} is already downloaded and ready to install.",
+      percent: 100,
+      bytesPerSecond: 0,
+    });
     promptInstallDownloadedUpdate(pending.version).catch(() => {});
     return {
       ok: true,
@@ -1656,6 +1755,11 @@ ipcMain.handle("check-for-updates-manual", async () => {
       message: "You are already on the latest version.",
     };
   } catch (e) {
+    setUpdaterStatus({
+      phase: "error",
+      message: e?.message || "Manual update check failed.",
+      bytesPerSecond: 0,
+    });
     return {
       ok: false,
       reason: "check-failed",
@@ -1663,6 +1767,12 @@ ipcMain.handle("check-for-updates-manual", async () => {
     };
   }
 });
+
+ipcMain.handle("get-update-status", () => ({
+  ok: true,
+  currentVersion: app.getVersion(),
+  ...updaterStatus,
+}));
 
 ipcMain.handle("get-app-version", () => ({
   ok: true,

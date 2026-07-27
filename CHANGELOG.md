@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.22 - 2026-07-27
+
+### Highlights
+- Added live updater status tracking in Settings, including real download percentage and transfer speed.
+
+### Stability and Behavior
+- App now emits updater phases (`checking`, `downloading`, `downloaded`, `up-to-date`, `error`) from main process to renderer.
+- Settings page now shows current updater state and a progress bar during downloads instead of only static background messaging.
+
 ## 1.0.21 - 2026-07-27
 
 ### Highlights

@@ -185,6 +185,23 @@ export function checkForUpdatesManual() {
   return invoke("checkForUpdatesManual");
 }
 
+export function getUpdateStatus() {
+  return invoke("getUpdateStatus");
+}
+
+export function onUpdateStatus(cb) {
+  if (typeof window !== "undefined" && window.electronAPI?.onUpdateStatus) {
+    return window.electronAPI.onUpdateStatus(cb);
+  }
+  return cb;
+}
+
+export function offUpdateStatus(wrapper) {
+  if (typeof window !== "undefined" && window.electronAPI?.offUpdateStatus) {
+    window.electronAPI.offUpdateStatus(wrapper);
+  }
+}
+
 /** Start/stop the background IMAP poll loop — runs in main process, survives page navigation */
 export function startImapPoll() {
   return invoke("startImapPoll");
