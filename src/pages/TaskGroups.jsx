@@ -14,7 +14,7 @@ const LOGIN_URL = "https://www.walmart.com/account/login";
 // ── Shared form blank ─────────────────────────────────────────────────────────
 const makeBlank = (section) => ({
   name: "",
-  retailer: section === "walmart" ? "Walmart" : "",
+  retailer: section === "walmart" ? "walmart" : "pokemon-center",
   target_url: "https://",
   instance_count: 5,
   delay_ms: 0,
@@ -61,6 +61,18 @@ function TaskGroupForm({ initial = null, proxyGroups, profiles, accounts, onSave
           <Label className="text-xs text-gray-400 font-mono">Target URL *</Label>
           <Input value={form.target_url} onChange={(e) => set("target_url", e.target.value)} placeholder="https://example.com/product" className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
         </div>
+        {section !== "walmart" && (
+          <div className="col-span-2">
+            <Label className="text-xs text-gray-400 font-mono">Retailer</Label>
+            <Select value={String(form.retailer || "pokemon-center").toLowerCase()} onValueChange={(v) => set("retailer", v)}>
+              <SelectTrigger className="bg-white/5 border-white/10 font-mono text-xs mt-1 h-9"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-[#1a1a24] border-white/10">
+                <SelectItem value="pokemon-center" className="font-mono text-xs text-gray-100">PokemonCenter</SelectItem>
+                <SelectItem value="costco" className="font-mono text-xs text-gray-100">Costco</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <div>
           <Label className="text-xs text-gray-400 font-mono">
             Instances {section === "walmart" && (form.account_ids || []).length > 0 && <span className="text-orange-400">(locked to account count)</span>}
@@ -389,7 +401,7 @@ function TaskGroupSection({ title, icon: SectionIcon, accentColor, section, grou
 
   const create = async (data) => {
     setLoading(true);
-    await db.TaskGroup.create({ ...data, retailer: section === "walmart" ? "Walmart" : data.retailer });
+    await db.TaskGroup.create({ ...data, retailer: section === "walmart" ? "walmart" : String(data.retailer || "pokemon-center").toLowerCase() });
     setLoading(false);
     setDialogOpen(false);
     toast.success("Task group created");
