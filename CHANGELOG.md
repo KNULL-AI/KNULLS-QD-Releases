@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.25 - 2026-07-27
+
+### Highlights
+- Fixed global trigger launches for legacy task groups and stale activation sessions.
+
+### Stability and Behavior
+- Trigger bus now falls back to a default websocket endpoint when session `ws_url` is missing.
+- Trigger matching now normalizes `queue` and `security` payload types to `pokemon-center`.
+- Legacy task groups with blank retailer values are inferred from name/target URL so existing setups still launch.
+
 ## 1.0.24 - 2026-07-27
 
 ### Highlights
