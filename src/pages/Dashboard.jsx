@@ -80,14 +80,14 @@ export default function Dashboard() {
   const active = runningSessions.length;
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
           <h1 className="font-mono text-lg font-semibold text-gray-100">Dashboard</h1>
           <p className="text-xs text-gray-500 font-mono mt-1">Overview of your proxy pool and browser sessions</p>
         </div>
         {active > 0 && (
           <button onClick={stopAllSessions}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px] font-mono bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors flex-shrink-0">
+            className="flex w-full sm:w-auto items-center justify-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px] font-mono bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors flex-shrink-0">
             <StopCircle className="w-3.5 h-3.5" /> Stop All ({active})
           </button>
         )}

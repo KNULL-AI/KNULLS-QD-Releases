@@ -52,9 +52,9 @@ export default function Logs() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="font-mono text-lg font-semibold text-gray-100">System Logs</h1>
-          <p className="text-xs text-gray-500 font-mono mt-1">{logs.length} entries</p>
+          <p className="text-xs text-gray-500 font-mono mt-1">{filtered.length} shown · {logs.length} total</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button onClick={handleExport} disabled={filtered.length === 0} variant="outline" className="bg-transparent border-white/10 text-gray-400 hover:text-blue-400 hover:border-blue-500/30 font-mono text-xs gap-2">
             <Download className="w-3.5 h-3.5" /> Export
           </Button>

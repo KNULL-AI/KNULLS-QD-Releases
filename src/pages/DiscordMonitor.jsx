@@ -7,66 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import toast from "react-hot-toast";
-import { launchBrowser, fetchDiscordMessages } from "@/lib/electronBridge";
-
-const ENABLE_LOCAL_DISCORD_POLLING = false;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function buildAuthHeader(monitor) {
-  const token = monitor?.bot_token?.trim();
-  return token ? `Bot ${token}` : "";
-}
-
-async function fetchMessages(authHeader, channelId, afterId) {
-  const result = await fetchDiscordMessages(authHeader, channelId, afterId);
-  if (result.error) throw new Error(result.error);
-  return Array.isArray(result.messages) ? result.messages : [];
-}
-
-/** Extract all URLs from a Discord message object or raw content string.
- *  Handles:
- *  1. Plain-text URLs:          https://walmart.com/ip/12345
- *  2. Markdown hyperlinks:      [Queue detected](https://walmart.com/ip/12345)
- *  3. Discord embed URLs:       message.embeds[].url / embeds[].fields[].value
- */
-function extractUrls(contentOrMsg) {
-  const results = [];
-
-  // Accept either a raw string (legacy) or a full Discord message object
-  const content = typeof contentOrMsg === "string" ? contentOrMsg : (contentOrMsg?.content || "");
-  const embeds = typeof contentOrMsg === "object" ? (contentOrMsg?.embeds || []) : [];
-
-  // 1. Markdown links: [label](url)
-  const mdLinks = [...(content?.matchAll(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g) || [])];
-  for (const m of mdLinks) results.push(m[2]);
-
-  // 2. Plain-text URLs (after stripping markdown links to avoid dupes)
-  const stripped = content?.replace(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, "") || "";
-  const plain = stripped.match(/https?:\/\/[^\s<>"]+/g) || [];
-  results.push(...plain);
-
-  // 3. Discord embed urls
-  for (const embed of embeds) {
-    if (embed.url) results.push(embed.url);
-    // Embed description may also contain URLs
-    if (embed.description) {
-      const dMd = [...(embed.description.matchAll(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g))];
-      for (const m of dMd) results.push(m[2]);
-      const dPlain = embed.description.replace(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, "").match(/https?:\/\/[^\s<>"]+/g) || [];
-      results.push(...dPlain);
-    }
-    // Embed fields
-    for (const field of (embed.fields || [])) {
-      const fMd = [...(field.value?.matchAll(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g) || [])];
-      for (const m of fMd) results.push(m[2]);
-      const fPlain = field.value?.replace(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, "").match(/https?:\/\/[^\s<>"]+/g) || [];
-      results.push(...fPlain);
-    }
-  }
-
-  // Dedupe while preserving order
-  return [...new Set(results)];
-}
+import { launchBrowser } from "@/lib/electronBridge";
 
 // ── Global in-memory event log (shared across all MonitorCards) ───────────────
 // Using a module-level array + subscriber list so cards can push without prop drilling
@@ -97,54 +38,6 @@ function normalizeUrl(url) {
   } catch {
     return url.toLowerCase().replace(/\/$/, "");
   }
-}
-
-/** Test a keyword against a message — supports regex if wrapped in /.../ */
-function matchesKeyword(content, keyword) {
-  if (!keyword) return true; // no keyword = any message triggers
-  const regexMatch = keyword.match(/^\/(.+)\/([gimsuy]*)$/);
-  if (regexMatch) {
-    try {
-      return new RegExp(regexMatch[1], regexMatch[2]).test(content);
-    } catch {
-      // ignore invalid regex
-    }
-  }
-  return content?.toLowerCase().includes(keyword.toLowerCase());
-}
-
-function getMessageSearchText(msg) {
-  if (!msg) return "";
-  const parts = [];
-  if (typeof msg.content === "string") parts.push(msg.content);
-
-  const embeds = Array.isArray(msg.embeds) ? msg.embeds : [];
-  for (const embed of embeds) {
-    if (typeof embed?.title === "string") parts.push(embed.title);
-    if (typeof embed?.description === "string") parts.push(embed.description);
-    for (const field of (embed?.fields || [])) {
-      if (typeof field?.name === "string") parts.push(field.name);
-      if (typeof field?.value === "string") parts.push(field.value);
-    }
-  }
-
-  // Discord forwarded posts often store the original content in message_snapshots.
-  const snapshots = Array.isArray(msg.message_snapshots) ? msg.message_snapshots : [];
-  for (const snap of snapshots) {
-    const source = snap?.message;
-    if (typeof source?.content === "string") parts.push(source.content);
-    const sourceEmbeds = Array.isArray(source?.embeds) ? source.embeds : [];
-    for (const embed of sourceEmbeds) {
-      if (typeof embed?.title === "string") parts.push(embed.title);
-      if (typeof embed?.description === "string") parts.push(embed.description);
-      for (const field of (embed?.fields || [])) {
-        if (typeof field?.name === "string") parts.push(field.name);
-        if (typeof field?.value === "string") parts.push(field.value);
-      }
-    }
-  }
-
-  return parts.join("\n");
 }
 
 function pickProxy(proxies, mode, index) {
@@ -454,11 +347,12 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
           {/* Timing */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs text-gray-400 font-mono">Poll Interval (sec)</Label>
+              <Label className="text-xs text-gray-400 font-mono">Trigger Cadence (seconds)</Label>
               <Input type="number" min="0.1" step="0.1" max="60" value={pollInterval} onChange={(e) => setPollInterval(e.target.value)} className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
+              <p className="text-[9px] font-mono text-gray-600 mt-1">Backend worker checks this monitor on this cadence.</p>
             </div>
             <div>
-              <Label className="text-xs text-gray-400 font-mono">Cooldown (sec)</Label>
+              <Label className="text-xs text-gray-400 font-mono">Cooldown (seconds)</Label>
               <Input type="number" min="5" value={cooldownSeconds} onChange={(e) => setCooldownSeconds(e.target.value)} className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
             </div>
           </div>
@@ -476,277 +370,22 @@ function EditMonitorDialog({ monitor, taskGroups, onSaved }) {
 function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
   const [active, setActive] = useState(monitor.is_active);
   const [lastEvents, setLastEvents] = useState([]); // [{channelLabel, time, instances}]
-  const [errors, setErrors] = useState(/** @type {any} */ ({}));
   const [launchedIds, setLaunchedIds] = useState(new Set()); // tracks manually/auto launched TG ids this session
-  const timerRef = useRef(null);       // holds the current setTimeout handle
-  const runningRef = useRef(false);    // true while a poll is in flight — prevents stacking
-  const activeRef = useRef(monitor.is_active); // read inside async poll without stale closure
-  const monitorIdRef = useRef(monitor.id);
-  const monitorNameRef = useRef(monitor.name);
-  const intervalMsRef = useRef((monitor.poll_interval_seconds || 5) * 1000);
   const launchedIdsRef = useRef(new Set());
-  const taskGroupsRef = useRef(taskGroups);
-  // In-memory cursor cache: channelId → last_message_id (avoids DB-write race on fast polls)
-  const cursorCacheRef = useRef({});
-  // In-memory set of message IDs that have already triggered a launch this session
-  const firedMessageIdsRef = useRef(new Set());
-  useEffect(() => { taskGroupsRef.current = taskGroups; }, [taskGroups]);
   const syncLaunchedIds = (newSet) => { launchedIdsRef.current = newSet; setLaunchedIds(newSet); };
-
-  const stopLoop = () => {
-    clearTimeout(timerRef.current);
-    timerRef.current = null;
-  };
-
-  const poll = async () => {
-    // Guard: skip this tick if a previous poll is still running
-    if (runningRef.current) {
-      scheduleNext();
-      return;
-    }
-    runningRef.current = true;
-    try {
-      const fresh = await db.DiscordMonitor.get(monitorIdRef.current);
-      if (!fresh.is_active) { stopLoop(); activeRef.current = false; setActive(false); return; }
-
-      // Update interval in case it changed via Edit
-      intervalMsRef.current = (fresh.poll_interval_seconds || 5) * 1000;
-
-      const channels = fresh.channels || [];
-      if (!channels.length) { scheduleNext(); return; }
-
-      const authHeader = buildAuthHeader(fresh);
-      const updatedChannels = [...channels];
-      let triggered = false;
-      let totalInstances = 0;
-      let triggerChannelLabel = "";
-      let triggerMsgContent = null;
-      const newErrors = {};
-
-      // ── Fetch ALL channels in parallel ──────────────────────────────────────
-      // Use in-memory cursor cache to avoid DB-write race on fast poll intervals
-      const results = await Promise.allSettled(
-        channels.map((ch) => {
-          const cachedCursor = cursorCacheRef.current[ch.channel_id] ?? ch.last_message_id;
-          return fetchMessages(authHeader, ch.channel_id, cachedCursor);
-        })
-      );
-
-      for (let ci = 0; ci < channels.length; ci++) {
-        const ch = channels[ci];
-        const result = results[ci];
-        if (result.status === "rejected") {
-          newErrors[ch.channel_id] = result.reason?.message || String(result.reason);
-          pushLog({ type: "error", monitor: monitorNameRef.current, channel: ch.label || ch.channel_id, msg: newErrors[ch.channel_id] });
-          continue;
-        }
-        const msgs = result.value;
-        if (!msgs.length) continue;
-
-        const lastId = msgs[msgs.length - 1].id;
-        // Update in-memory cursor immediately so next poll doesn't re-fetch these
-        cursorCacheRef.current[ch.channel_id] = lastId;
-        updatedChannels[ci] = { ...ch, last_message_id: lastId };
-
-        if (!triggered) {
-          const keyword = ch.keyword?.trim();
-          // Pokemon Center: override keyword to match its specific trigger phrases
-          const isPokemon = fresh.retailer_type === "pokemon_center";
-          const pokemonMatch = (msg) => {
-            const text = getMessageSearchText(msg).toLowerCase();
-            return text.includes("security change detected") || text.includes("queue detected");
-          };
-
-          // Find first message that matches keyword AND hasn't already fired a launch
-          const triggerMsg = msgs.find((m) =>
-            (isPokemon ? pokemonMatch(m) : matchesKeyword(m.content, keyword)) &&
-            !firedMessageIdsRef.current.has(m.id)
-          );
-          if (triggerMsg) {
-            triggered = true;
-            triggerChannelLabel = ch.label || ch.channel_id;
-            triggerMsgContent = triggerMsg;
-            // Mark this message ID as fired immediately to block duplicate triggers
-            firedMessageIdsRef.current.add(triggerMsg.id);
-            pushLog({ type: "trigger", monitor: monitorNameRef.current, channel: ch.label || ch.channel_id, msg: triggerMsg.content?.slice(0, 120) || "(embed)" });
-          }
-        }
-      }
-
-      // Cooldown guard — for Walmart mode, cooldown is per-URL (handled inside launch block),
-      // so skip the global cooldown check to allow different items to trigger freely.
-      let cooldownActive = false;
-      if (triggered && fresh.retailer_type !== "walmart" && fresh.last_triggered) {
-        const msSinceLast = Date.now() - new Date(fresh.last_triggered).getTime();
-        const cooldownMs = (fresh.cooldown_seconds ?? 600) * 1000;
-        if (msSinceLast < cooldownMs) {
-          triggered = false;
-          cooldownActive = true;
-          const remaining = Math.ceil((cooldownMs - msSinceLast) / 1000);
-          pushLog({ type: "cooldown", monitor: monitorNameRef.current, channel: triggerChannelLabel, msg: `Cooldown suppressed re-trigger — ${remaining}s remaining` });
-          setErrors((prev) => ({ ...prev, _cooldown: `Cooldown active — ${remaining}s remaining` }));
-        } else {
-          setErrors((prev) => { const e = { ...prev }; delete e._cooldown; return e; });
-        }
-      }
-
-      // Persist updated cursors FIRST — but DON'T advance cursor if cooldown suppressed
-      // so the trigger message is re-evaluated once the cooldown expires
-      const updatePayload = { channels: cooldownActive ? channels : updatedChannels };
-      if (triggered) {
-        updatePayload.last_triggered = new Date().toISOString();
-        updatePayload.trigger_count = (fresh.trigger_count || 0) + 1;
-      }
-      await db.DiscordMonitor.update(fresh.id, updatePayload);
-
-      // Launch task groups
-      if (triggered) {
-        const pool = (fresh.task_group_ids || []).map((id) => taskGroupsRef.current.find((t) => t.id === id)).filter(Boolean);
-
-        if (fresh.retailer_type === "walmart") {
-          // Forwarded messages store their content in message_snapshots[0].message
-          // rather than the top-level message object — resolve to the real message first
-          const snapshots = triggerMsgContent?.message_snapshots || [];
-          const resolvedMsg = snapshots.length > 0 ? snapshots[0].message : triggerMsgContent;
-          pushLog({ type: "info", monitor: monitorNameRef.current, channel: triggerChannelLabel, msg: `[DEBUG] snapshots=${snapshots.length} embeds=${(resolvedMsg?.embeds||[]).length} content="${(resolvedMsg?.content||"").slice(0,80)}"` });
-
-          const allUrls = extractUrls(resolvedMsg);
-          const urlMap = new Map();
-          for (const url of allUrls) {
-            const norm = normalizeUrl(url);
-            if (!norm) continue;
-            if (!urlMap.has(norm)) urlMap.set(norm, url);
-          }
-          const allUniqueUrls = [...urlMap.entries()].map(([norm, url]) => ({ norm, url }));
-          const walmartUrls = allUniqueUrls.filter((item) => item.norm.includes("walmart.com"));
-          const activeUrls = walmartUrls.length ? walmartUrls : allUniqueUrls;
-          const freshUrls = activeUrls.filter((item) => !firedMessageIdsRef.current.has(`url:${item.norm}`));
-
-          if (!activeUrls.length) {
-            newErrors._walmart = `No URL found in Discord message`;
-          } else if (!freshUrls.length) {
-            pushLog({ type: "cooldown", monitor: monitorNameRef.current, channel: triggerChannelLabel, msg: "Duplicate Walmart URL suppressed — already launched earlier" });
-          } else if (!pool.length) {
-            newErrors._walmart = `No task groups assigned to this monitor`;
-          } else {
-            // One task group per unique URL. If there are more groups than URLs,
-            // extra groups stay idle for this trigger.
-            const launchCount = Math.min(pool.length, freshUrls.length);
-            for (let i = 0; i < launchCount; i++) {
-              const tg = pool[i];
-              const assigned = freshUrls[i];
-              const assignedUrl = assigned.url;
-              const urlKey = `url:${assigned.norm}`;
-              firedMessageIdsRef.current.add(urlKey);
-              await db.TaskGroup.update(tg.id, { target_url: assignedUrl });
-              const launchedCount = await runTaskGroup({ ...tg, target_url: assignedUrl });
-              totalInstances += launchedCount || (tg.instance_count || 1);
-              syncLaunchedIds(new Set([...launchedIdsRef.current, tg.id]));
-            }
-          }
-        } else if (fresh.retailer_type === "costco") {
-          // Try direct URL, then embedded URL from forwarded/embed messages
-          const snapshots = triggerMsgContent?.message_snapshots || [];
-          const resolvedMsg = snapshots.length > 0 ? snapshots[0].message : triggerMsgContent;
-          const msgUrls = extractUrls(resolvedMsg);
-          const dropUrl = msgUrls[0];
-          if (!dropUrl) {
-            setErrors((prev) => ({ ...prev, _costco: `No URL found in Discord message — use manual input below` }));
-          } else if (pool.length === 0) {
-            setErrors((prev) => ({ ...prev, _costco: `No task group assigned to this Costco monitor` }));
-          } else {
-            setErrors((prev) => { const e = { ...prev }; delete e._costco; return e; });
-            for (const tg of pool) {
-              await db.TaskGroup.update(tg.id, { target_url: dropUrl });
-              const updatedTg = { ...tg, target_url: dropUrl };
-              await runTaskGroup(updatedTg);
-              totalInstances += updatedTg.instance_count || 1;
-            }
-            toast.success(`🛒 Costco drop detected — URL updated & ${totalInstances} instances launched`);
-          }
-        } else if (fresh.retailer_type === "pokemon_center") {
-          // No URL needed — just fire all assigned task groups
-          if (pool.length === 0) {
-            setErrors((prev) => ({ ...prev, _pokemon: `No task groups assigned to this Pokemon Center monitor` }));
-          } else {
-            setErrors((prev) => { const e = { ...prev }; delete e._pokemon; return e; });
-            for (const tg of pool) {
-              await runTaskGroup(tg);
-              totalInstances += tg.instance_count || 1;
-            }
-            toast.success(`⚡ Pokemon Center triggered — ${totalInstances} instances launched`);
-          }
-        } else {
-          for (const tg of pool) {
-            await runTaskGroup(tg);
-            totalInstances += tg.instance_count || 1;
-          }
-        }
-
-        if (totalInstances > 0) {
-          setLastEvents((prev) => [{ channelLabel: triggerChannelLabel, time: new Date().toLocaleTimeString(), instances: totalInstances }, ...prev].slice(0, 3));
-          pushLog({ type: "launched", monitor: monitorNameRef.current, channel: triggerChannelLabel, msg: `${totalInstances} instance${totalInstances !== 1 ? "s" : ""} launched` });
-          toast.success(`🚀 ${monitorNameRef.current} triggered — ${totalInstances} instances launched`);
-        }
-      }
-
-      setErrors((prev) => {
-        const special = {};
-        if (newErrors._walmart) special._walmart = newErrors._walmart;
-        else if (prev._walmart) special._walmart = prev._walmart;
-        if (prev._cooldown) special._cooldown = prev._cooldown;
-        if (newErrors._costco) special._costco = newErrors._costco;
-        else if (prev._costco && !triggered) special._costco = prev._costco;
-        const channelErrors = Object.fromEntries(Object.entries(newErrors).filter(([k]) => !k.startsWith("_")));
-        return { ...special, ...channelErrors };
-      });
-    } catch (e) {
-      setErrors((prev) => ({ ...prev, _global: e.message }));
-    } finally {
-      runningRef.current = false;
-      if (activeRef.current) scheduleNext();
-    }
-  };
-
-  // Schedule the next poll tick using setTimeout (not setInterval) so polls never stack
-  const scheduleNext = () => {
-    clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(poll, intervalMsRef.current);
-  };
-
-  const startPolling = (mon) => {
-    if (!ENABLE_LOCAL_DISCORD_POLLING) {
-      stopLoop();
-      runningRef.current = false;
-      setErrors((prev) => ({
-        ...prev,
-        _global: "Local Discord polling is disabled. This monitor now waits for backend global trigger bus events.",
-      }));
-      return;
-    }
-    activeRef.current = true;
-    intervalMsRef.current = (mon.poll_interval_seconds || 5) * 1000;
-    cursorCacheRef.current = {}; // reset cursor cache on each start
-    firedMessageIdsRef.current = new Set(); // reset fired IDs on each start
-    stopLoop();
-    scheduleNext();
-  };
-
-  useEffect(() => {
-    if (monitor.is_active && ENABLE_LOCAL_DISCORD_POLLING) {
-      startPolling(monitor);
-    }
-    return () => { activeRef.current = false; stopLoop(); };
-  }, [monitor.id]);
 
   const toggle = async () => {
     const next = !active;
     setActive(next);
-    activeRef.current = next;
-    setErrors({});
     await db.DiscordMonitor.update(monitor.id, { is_active: next });
-    if (next) { startPolling({ ...monitor, is_active: true }); pushLog({ type: "info", monitor: monitorNameRef.current, channel: "—", msg: "Monitor armed for backend global triggers" }); toast.success(`"${monitor.name}" monitor armed`); }
-    else { stopLoop(); syncLaunchedIds(new Set()); pushLog({ type: "info", monitor: monitorNameRef.current, channel: "—", msg: "Monitor stopped" }); toast(`"${monitor.name}" monitor stopped`); }
+    if (next) {
+      pushLog({ type: "info", monitor: monitor.name, channel: "—", msg: "Monitor armed for backend global triggers" });
+      toast.success(`"${monitor.name}" monitor armed`);
+    } else {
+      syncLaunchedIds(new Set());
+      pushLog({ type: "info", monitor: monitor.name, channel: "—", msg: "Monitor stopped" });
+      toast(`"${monitor.name}" monitor stopped`);
+    }
     onUpdate();
   };
 
@@ -764,7 +403,6 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
   };
 
   const assignedGroups = (monitor.task_group_ids || []).map((id) => taskGroups.find((t) => t.id === id)).filter(Boolean);
-  const errorList = Object.entries(errors);
 
   return (
     <div className={`relative p-4 rounded-sm border transition-all space-y-3 ${active ? "border-violet-500/30 bg-violet-500/5" : "border-white/5 bg-[#08080f]"}`}>
@@ -796,7 +434,7 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
               </span>
             )}
           </div>
-          <p className="text-[10px] font-mono text-gray-600 mt-0.5">backend-managed global monitor · every {monitor.poll_interval_seconds || 5}s</p>
+          <p className="text-[10px] font-mono text-gray-600 mt-0.5">Backend-managed global monitor · worker cadence {monitor.poll_interval_seconds || 5}s</p>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <button onClick={toggle} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-mono border transition-all ${active ? "bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20" : "bg-violet-500/10 border-violet-500/20 text-violet-400 hover:bg-violet-500/20"}`}>
@@ -856,38 +494,6 @@ function MonitorCard({ monitor, taskGroups, onUpdate, onDelete }) {
         <div key={i} className="px-2 py-1.5 rounded-sm bg-violet-500/10 border border-violet-500/20 text-[10px] font-mono text-violet-300">
           ▶ {ev.time} — {ev.channelLabel} fired · {ev.instances} instances launched
         </div>
-      ))}
-
-      {/* Costco error */}
-      {errors._costco && <div className="px-2 py-1.5 rounded-sm bg-orange-500/10 border border-orange-500/20 text-[10px] font-mono text-orange-400">⚠ {errors._costco}</div>}
-
-      {/* Pokemon Center error */}
-      {errors._pokemon && <div className="px-2 py-1.5 rounded-sm bg-red-500/10 border border-red-500/20 text-[10px] font-mono text-red-400">⚠ {errors._pokemon}</div>}
-
-      {/* Walmart URL mismatch warning */}
-      {errors._walmart && <div className="px-2 py-1.5 rounded-sm bg-yellow-500/10 border border-yellow-500/20 text-[10px] font-mono text-yellow-400">⚠ {errors._walmart}</div>}
-
-      {/* Cooldown indicator */}
-      {errors._cooldown && (
-        <div className="flex items-center gap-2 px-2 py-1.5 rounded-sm bg-yellow-500/10 border border-yellow-500/20 text-[10px] font-mono text-yellow-400">
-          <span className="flex-1">⏳ {errors._cooldown}</span>
-          <button
-            onClick={async () => {
-              await db.DiscordMonitor.update(monitor.id, { last_triggered: null });
-              setErrors((prev) => { const e = { ...prev }; delete e._cooldown; return e; });
-              toast.success("Cooldown reset");
-            }}
-            className="px-1.5 py-0.5 rounded border border-yellow-500/30 hover:bg-yellow-500/20 text-yellow-300 transition-colors whitespace-nowrap"
-          >
-            Reset
-          </button>
-        </div>
-      )}
-
-      {/* Errors */}
-      {errors._global && <div className="px-2 py-1.5 rounded-sm bg-red-500/10 border border-red-500/20 text-[10px] font-mono text-red-400">⚠ {errors._global}</div>}
-      {errorList.filter(([k]) => !k.startsWith("_")).map(([chId, msg]) => (
-        <div key={chId} className="px-2 py-1.5 rounded-sm bg-red-500/10 border border-red-500/20 text-[10px] font-mono text-red-400">⚠ CH {chId}: {msg}</div>
       ))}
 
       {active && <div className="h-px w-full bg-gradient-to-r from-transparent via-violet-500/50 to-transparent animate-pulse" />}
@@ -988,8 +594,9 @@ function AddMonitorDialog({ taskGroups, onAdded }) {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs text-gray-400 font-mono">Poll Interval (seconds)</Label>
+              <Label className="text-xs text-gray-400 font-mono">Trigger Cadence (seconds)</Label>
               <Input type="number" min="0.1" step="0.1" max="60" value={pollInterval} onChange={(e) => setPollInterval(e.target.value)} className="bg-white/5 border-white/10 font-mono text-sm mt-1" />
+              <p className="text-[9px] font-mono text-gray-600 mt-1">Sets how often backend trigger matching runs for this monitor.</p>
             </div>
             <div>
               <Label className="text-xs text-gray-400 font-mono">Cooldown (seconds)</Label>
@@ -1176,16 +783,16 @@ export default function DiscordMonitor() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 border-b border-white/5 pb-0">
+      <div className="flex items-center gap-1 border-b border-white/5 pb-0 overflow-x-auto">
         <button
           onClick={() => setTab("monitors")}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border-b-2 transition-colors -mb-px ${tab === "monitors" ? "border-violet-400 text-violet-300" : "border-transparent text-gray-500 hover:text-gray-300"}`}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border-b-2 transition-colors -mb-px whitespace-nowrap ${tab === "monitors" ? "border-violet-400 text-violet-300" : "border-transparent text-gray-500 hover:text-gray-300"}`}
         >
           <Radio className="w-3 h-3" /> Monitors
         </button>
         <button
           onClick={() => setTab("log")}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border-b-2 transition-colors -mb-px ${tab === "log" ? "border-violet-400 text-violet-300" : "border-transparent text-gray-500 hover:text-gray-300"}`}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border-b-2 transition-colors -mb-px whitespace-nowrap ${tab === "log" ? "border-violet-400 text-violet-300" : "border-transparent text-gray-500 hover:text-gray-300"}`}
         >
           <ScrollText className="w-3 h-3" /> Event Log
           {_discordLog.length > 0 && <span className="ml-1 px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 text-[9px]">{_discordLog.length}</span>}

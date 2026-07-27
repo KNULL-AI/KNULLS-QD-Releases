@@ -34,6 +34,13 @@ const _httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, keepAlive
 const _httpAgent  = new http.Agent({  keepAlive: true, maxSockets: 32, keepAliveMsecs: 10000 });
 
 const CHROME_FULL_VERSION = process.versions.chrome || "131.0.0.0";
+const VERBOSE_MAIN_LOGS = !app.isPackaged || String(process.env.KNULL_VERBOSE_MAIN_LOGS || "").toLowerCase() === "1" || String(process.env.KNULL_VERBOSE_MAIN_LOGS || "").toLowerCase() === "true";
+
+function mainDebug(...args) {
+  if (VERBOSE_MAIN_LOGS) {
+    console.log(...args);
+  }
+}
 
 // ── SQLite local database ─────────────────────────────────────────────────────
 let Database;
@@ -678,7 +685,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   else sessionCredentials.delete(sessionId);
 
   const accountEmail = credentials?.email || null;
-  console.log(`[knull] Launched BrowserWindow session ${sessionId} manualOpen=${manualOpen} account=${accountEmail || "none"} → ${url} via ${proxy ? `${proxy.protocol || "HTTP"} ${proxy.host}:${proxy.port} auth=${!!proxy.username}` : "no proxy"}`);
+  mainDebug(`[knull] Launched BrowserWindow session ${sessionId} manualOpen=${manualOpen} account=${accountEmail || "none"} → ${url} via ${proxy ? `${proxy.protocol || "HTTP"} ${proxy.host}:${proxy.port} auth=${!!proxy.username}` : "no proxy"}`);
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("session-launched", {
       sessionId,
@@ -1191,9 +1198,9 @@ async function imapPollOnce() {
 
   _imapDbUpdate("ImapConfig", cfg.id, { last_sync: new Date().toISOString() });
 
-  console.log("[knull-imap] poll complete: found", messages.length, "messages,", newCodes.length, "new codes, mainWindow:", !!mainWindow);
+  mainDebug("[knull-imap] poll complete: found", messages.length, "messages,", newCodes.length, "new codes, mainWindow:", !!mainWindow);
   if (mainWindow && !mainWindow.isDestroyed()) {
-    console.log("[knull-imap] sending imap-poll-event to renderer");
+    mainDebug("[knull-imap] sending imap-poll-event to renderer");
     mainWindow.webContents.send("imap-poll-event", { type: "result", newCodes, checkedCount: messages.length });
   } else {
     console.warn("[knull-imap] mainWindow not ready, event NOT sent");
@@ -1212,13 +1219,13 @@ function imapScheduleNext() {
 }
 
 ipcMain.handle("start-imap-poll", () => {
-  console.log("[knull-imap] start-imap-poll called, currently active:", imapPollActive);
+  mainDebug("[knull-imap] start-imap-poll called, currently active:", imapPollActive);
   if (imapPollActive) return { ok: true, alreadyRunning: true };
   imapPollActive = true;
   // Seed the dedup set from already-known codes so a restart doesn't reprocess old mail.
   imapProcessedUids.clear();
   _imapDbList("VerificationCode").forEach((c) => c.message_uid && imapProcessedUids.add(c.message_uid));
-  console.log("[knull-imap] poll activated, scheduling first poll");
+  mainDebug("[knull-imap] poll activated, scheduling first poll");
   imapScheduleNext();
   return { ok: true };
 });
@@ -1552,7 +1559,7 @@ async function promptInstallDownloadedUpdate(version) {
 
 function setupAutoUpdater() {
   if (!app.isPackaged) {
-    console.log("[knull] Auto-updater disabled in development mode");
+    mainDebug("[knull] Auto-updater disabled in development mode");
     return;
   }
 
@@ -1560,11 +1567,11 @@ function setupAutoUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on("checking-for-update", () => {
-    console.log("[knull] Checking for app updates...");
+    mainDebug("[knull] Checking for app updates...");
   });
 
   autoUpdater.on("update-available", (info) => {
-    console.log(`[knull] Update available: ${info?.version || "unknown"}`);
+    mainDebug(`[knull] Update available: ${info?.version || "unknown"}`);
     dialog.showMessageBox(mainWindow || null, {
       type: "info",
       title: "Update Available",
@@ -1574,7 +1581,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-not-available", () => {
-    console.log("[knull] App is up to date");
+    mainDebug("[knull] App is up to date");
   });
 
   autoUpdater.on("error", (err) => {
@@ -1582,7 +1589,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-downloaded", async (info) => {
-    console.log(`[knull] Update downloaded: ${info?.version || "unknown"}`);
+    mainDebug(`[knull] Update downloaded: ${info?.version || "unknown"}`);
     savePendingUpdate(info);
     await promptInstallDownloadedUpdate(info?.version);
   });

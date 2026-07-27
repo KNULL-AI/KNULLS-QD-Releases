@@ -7,7 +7,7 @@ const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
   { path: "/proxies", label: "Proxy Pool", icon: Shield },
   { path: "/sessions", label: "Sessions", icon: MonitorPlay },
-  { path: "/discord", label: "Monitoring", icon: Radio },
+  { path: "/discord", label: "Discord Monitor", icon: Radio },
   { path: "/accounts", label: "Accounts", icon: Users },
   { path: "/task-groups", label: "Task Groups", icon: ListChecks },
   { path: "/captcha", label: "Captcha", icon: ShieldCheck },
@@ -122,7 +122,9 @@ export default function AppLayout() {
         {/* Corner decorations */}
         <div className="absolute top-12 left-4 w-12 h-px bg-gradient-to-r from-emerald-500/25 to-transparent pointer-events-none" />
         <div className="absolute top-12 left-4 w-px h-12 bg-gradient-to-b from-emerald-500/25 to-transparent pointer-events-none" />
-        <Outlet />
+        <div className="mx-auto w-full max-w-[1680px]">
+          <Outlet />
+        </div>
       </main>
     </div>
   );
