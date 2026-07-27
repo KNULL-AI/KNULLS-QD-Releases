@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.20 - 2026-07-27
+
+### Highlights
+- Removed legacy duplicate Discord trigger listener path; global trigger bus is now the single runtime source.
+- Hardened public release exposure model to artifact-only publishing from private CI.
+- Kept mac build icon packaging aligned to `electron/icon.png` for DMG/ZIP outputs.
+
+### Stability and Behavior
+- Prevented potential duplicate trigger launches caused by parallel legacy + bus listeners.
+- Release pipeline now builds in private and uploads artifacts to public releases using `PUBLIC_RELEASES_TOKEN`.
+- Public release repository history was sanitized to artifact-only snapshots to reduce source exposure.
+
 ## 1.0.9 - 2026-07-24
 
 ### Highlights

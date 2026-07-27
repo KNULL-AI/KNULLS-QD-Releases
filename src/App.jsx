@@ -23,7 +23,6 @@ import { onImapPollEvent, offImapPollEvent } from '@/lib/electronBridge';
 import { db } from '@/lib/db';
 import { connectTriggerBus } from '@/lib/triggerBus';
 import { prewarmTaskLaunchPath, runTaskGroup } from '@/lib/taskGroupLauncher';
-import { useTriggerListener } from '@/lib/useTriggerListener';
 
 const VERBOSE_APP_LOGS = import.meta.env.DEV || String(import.meta.env.VITE_VERBOSE_APP_LOGS || '').toLowerCase() === 'true';
 
@@ -154,10 +153,6 @@ function AppContent() {
       if (stopBus) stopBus();
     };
   }, [isAuthenticated, authSession?.ws_url, getValidAccessToken]);
-
-  // Listen for global Discord trigger events and auto-launch task groups
-  const accessToken = isAuthenticated ? authSession?.access_token : null;
-  useTriggerListener(accessToken);
 
   return (
     <QueryClientProvider client={queryClientInstance}>
