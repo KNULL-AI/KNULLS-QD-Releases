@@ -25,6 +25,11 @@ import { connectTriggerBus } from '@/lib/triggerBus';
 import { prewarmTaskLaunchPath, runTaskGroup } from '@/lib/taskGroupLauncher';
 
 const VERBOSE_APP_LOGS = import.meta.env.DEV || String(import.meta.env.VITE_VERBOSE_APP_LOGS || '').toLowerCase() === 'true';
+const FALLBACK_TRIGGER_WS_URL = (
+  import.meta.env.VITE_TRIGGER_WS_URL
+  || import.meta.env.VITE_TRIGGER_API_BASE
+  || 'https://knull-trigger-auth.sloanbrack.workers.dev'
+).trim();
 
 function appDebug(...args) {
   if (VERBOSE_APP_LOGS) {
@@ -36,8 +41,23 @@ function normalizeRetailerKey(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return '';
   const compact = raw.replace(/[\s_]+/g, '-');
+  if (compact === 'queue' || compact === 'security') return 'pokemon-center';
   if (compact === 'pokemoncenter' || compact === 'pokemon-center') return 'pokemon-center';
   return compact;
+}
+
+function inferRetailerKey(group) {
+  const normalized = normalizeRetailerKey(group?.retailer || '');
+  if (normalized) return normalized;
+
+  const url = String(group?.target_url || '').toLowerCase();
+  const name = String(group?.name || '').toLowerCase();
+  const hint = `${name} ${url}`;
+
+  if (hint.includes('pokemoncenter') || hint.includes('pokemon-center')) return 'pokemon-center';
+  if (hint.includes('costco')) return 'costco';
+  if (hint.includes('walmart')) return 'walmart';
+  return '';
 }
 
 function AppContent() {
@@ -47,12 +67,8 @@ function AppContent() {
   const indexTaskGroups = (groups) => {
     const next = new Map();
     for (const group of Array.isArray(groups) ? groups : []) {
-      const retailer = normalizeRetailerKey(group?.retailer || '');
-      if (!retailer) {
-        if (!next.has('__ungrouped__')) next.set('__ungrouped__', []);
-        next.get('__ungrouped__').push(group);
-        continue;
-      }
+      const retailer = inferRetailerKey(group);
+      if (!retailer) continue;
       if (!next.has(retailer)) next.set(retailer, []);
       next.get(retailer).push(group);
     }
@@ -106,7 +122,7 @@ function AppContent() {
         refreshTaskGroupIndex().catch(() => {});
       });
 
-      const wsUrl = authSession?.ws_url || import.meta.env.VITE_TRIGGER_WS_URL || '';
+      const wsUrl = authSession?.ws_url || FALLBACK_TRIGGER_WS_URL;
       if (!wsUrl) return;
 
       const accessToken = await getValidAccessToken();
@@ -134,12 +150,6 @@ function AppContent() {
           if (!matching.length) {
             const indexed = await refreshTaskGroupIndex();
             matching = indexed.get(retailer) || [];
-          }
-          if (!matching.length && (retailer === 'pokemon-center' || retailer === 'costco')) {
-            const ungrouped = taskGroupsByRetailerRef.current.get('__ungrouped__') || [];
-            if (ungrouped.length === 1) {
-              matching = [ungrouped[0]];
-            }
           }
           if (!matching.length) {
             ack('ignored', `No local task groups for ${retailer}`);
