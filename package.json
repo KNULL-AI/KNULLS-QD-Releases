@@ -1,7 +1,7 @@
 {
   "name": "knull-queue-destroyer",
   "private": true,
-  "version": "1.0.23",
+  "version": "1.0.24",
   "main": "electron/main.entry.js",
   "scripts": {
     "dev": "vite",
