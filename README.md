@@ -1,4 +1,14 @@
-# KNULL Queue Destroyer - Complete User Guide
+# KNULLS-QD-Releases
+
+This repository is intentionally artifact-only.
+
+It contains public release assets for KNULL Queue Destroyer.
+Source code is maintained in a separate private repository.# KNULLS-QD-Releases
+
+This repository is intentionally artifact-only.
+
+It contains public release assets for KNULL Queue Destroyer.
+Source code is maintained in a separate private repository.# KNULL Queue Destroyer - Complete User Guide
 
 This guide is for end users running the desktop app from public releases.
 
