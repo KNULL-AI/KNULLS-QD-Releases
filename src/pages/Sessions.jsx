@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import LaunchSessionDialog from "@/components/session/LaunchSessionDialog";
 import SessionCard from "@/components/session/SessionCard";
 import toast from "react-hot-toast";
-import { killBrowser, launchBrowser, onSessionCrashed, offSessionCrashed, onAllSessionsKilled, offAllSessionsKilled } from "@/lib/electronBridge";
+import { killBrowser, launchBrowser, onSessionCrashed, offSessionCrashed, onSessionLoadFailed, offSessionLoadFailed, onAllSessionsKilled, offAllSessionsKilled } from "@/lib/electronBridge";
 
 export default function Sessions() {
   const [sessions, setSessions] = useState([]);
@@ -66,6 +66,17 @@ export default function Sessions() {
     const wrapper = (data) => handleCrashRef.current(data);
     const sub = onSessionCrashed(wrapper);
     return () => offSessionCrashed(sub ?? wrapper);
+  }, []);
+
+  // Session load failure watchdog — proxy errors surfaced as toasts
+  useEffect(() => {
+    const wrapper = ({ sessionId, errorCode, errorDescription, proxy }) => {
+      const proxyLabel = proxy ? `${proxy.host}:${proxy.port}` : "no proxy";
+      const shortDesc = errorDescription?.replace(/^net::/, "") || `Error ${errorCode}`;
+      toast.error(`Load failed [${shortDesc}] via ${proxyLabel}`, { id: `load-fail-${sessionId}-${errorCode}`, duration: 5000 });
+    };
+    const sub = onSessionLoadFailed(wrapper);
+    return () => offSessionLoadFailed(sub ?? wrapper);
   }, []);
 
   // Refresh session list when tray kills all sessions

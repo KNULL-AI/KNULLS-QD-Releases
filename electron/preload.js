@@ -52,6 +52,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onSessionCrashed: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-crashed", wrapper); return wrapper; },
   offSessionCrashed: (wrapper) => ipcRenderer.removeListener("session-crashed", wrapper),
 
+  // Session load failure — main notifies renderer on proxy-related page load errors
+  onSessionLoadFailed: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-load-failed", wrapper); return wrapper; },
+  offSessionLoadFailed: (wrapper) => ipcRenderer.removeListener("session-load-failed", wrapper),
+
   // Session launch diagnostics — main notifies renderer when browser windows are spawned
   onSessionLaunched: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-launched", wrapper); return wrapper; },
   offSessionLaunched: (wrapper) => ipcRenderer.removeListener("session-launched", wrapper),

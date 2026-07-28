@@ -115,6 +115,19 @@ export function onSessionCrashed(cb) {
   return cb;
 }
 
+export function onSessionLoadFailed(cb) {
+  if (typeof window !== "undefined" && window.electronAPI?.onSessionLoadFailed) {
+    return window.electronAPI.onSessionLoadFailed(cb);
+  }
+  return cb;
+}
+
+export function offSessionLoadFailed(wrapper) {
+  if (typeof window !== "undefined" && window.electronAPI?.offSessionLoadFailed) {
+    window.electronAPI.offSessionLoadFailed(wrapper);
+  }
+}
+
 export function offSessionCrashed(wrapper) {
   if (typeof window !== "undefined" && window.electronAPI?.offSessionCrashed) {
     window.electronAPI.offSessionCrashed(wrapper);
