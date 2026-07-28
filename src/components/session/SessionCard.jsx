@@ -69,6 +69,53 @@ export default function SessionCard({ session, onUpdate, selected, onToggleSelec
     }
   };
 
+  const handleRotateSessionAndProxy = async () => {
+    if (!session.id) return;
+
+    setRotatingSessionId(session.id);
+    try {
+      // Kill the current session
+      await killBrowser(session.id);
+      await stopQueueTimer(session.id);
+
+      // Get a new healthy proxy (different from current if possible)
+      const allHealthy = await db.Proxy.filter({ is_active: true, status: "healthy" });
+      const nextProxy = allHealthy.find((p) => p.id !== session.proxy_id) || allHealthy[0];
+
+      if (!nextProxy) {
+        toast.error("No available proxies for new session");
+        return;
+      }
+
+      // Update session with new proxy and restart
+      await db.BrowserSession.update(session.id, {
+        status: "running",
+        proxy_id: nextProxy.id,
+        proxy_label: `${nextProxy.protocol}://${nextProxy.host}:${nextProxy.port}`,
+        started_at: new Date().toISOString(),
+        stopped_at: null,
+      });
+
+      // Relaunch browser with new proxy
+      await launchBrowser({
+        sessionId: session.id,
+        url: session.target_url,
+        proxy: nextProxy,
+        userAgent: session.user_agent || null,
+        browser: session.browser || "chrome",
+        noPreload: false,
+      });
+
+      await startQueueTimer(session.id, 0);
+      toast.success(`Session + proxy rotated to ${nextProxy.host}:${nextProxy.port}`);
+      onUpdate?.();
+    } catch (err) {
+      toast.error(`Session rotation failed: ${err.message}`);
+    } finally {
+      setRotatingSessionId(null);
+    }
+  };
+
   const handleStop = async () => {
     killBrowser(session.id);
     await stopQueueTimer(session.id);
@@ -196,6 +243,15 @@ export default function SessionCard({ session, onUpdate, selected, onToggleSelec
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-mono transition-colors"
           >
             <RotateCw className={`w-3 h-3 ${rotatingSessionId === session.id ? "animate-spin" : ""}`} /> Force Rotate
+          </button>
+        )}
+        {isRunning && session.proxy_id && (
+          <button
+            onClick={handleRotateSessionAndProxy}
+            disabled={rotatingSessionId === session.id}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-mono transition-colors"
+          >
+            <RotateCw className={`w-3 h-3 ${rotatingSessionId === session.id ? "animate-spin" : ""}`} /> Rotate Session + Proxy
           </button>
         )}
         <SwapProxyDialog session={session} onSwapped={onUpdate} />
