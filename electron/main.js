@@ -525,7 +525,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     updateTray();
   });
 
-  // Log load failures to SystemLog so user can diagnose proxy issues
+  // Log load failures to SystemLog and notify renderer for proxy-related errors
   win.webContents.on("did-fail-load", (_e, errorCode, errorDescription, validatedURL) => {
     if (errorCode === -3) return; // user-aborted, ignore
     const msg = `Session load failed [${errorCode}] ${errorDescription} — URL: ${validatedURL || url} — Proxy: ${proxy ? proxy.host + ":" + proxy.port : "none"}`;
@@ -537,6 +537,17 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
         newId(), now, now,
         JSON.stringify({ level: "warn", source: "Sessions", message: msg, details: "" })
       );
+    }
+    // Notify renderer for proxy-related failures so the UI can surface them
+    const proxyErrors = [-130, -202, -7, -100, -101, -105, -106];
+    if (proxyErrors.includes(errorCode) && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("session-load-failed", {
+        sessionId,
+        errorCode,
+        errorDescription,
+        url: validatedURL || url,
+        proxy: proxy ? { host: proxy.host, port: proxy.port, protocol: proxy.protocol } : null,
+      });
     }
   });
 
@@ -687,7 +698,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   if (win.webContents?.id != null) {
     webContentsToSessionId.set(win.webContents.id, sessionId);
   }
-  if (proxy) sessionProxies.set(sessionId, { host: proxy.host, username: proxy.username, password: proxy.password || "" });
+  if (proxy) sessionProxies.set(sessionId, { host: proxy.host, port: proxy.port, username: proxy.username, password: proxy.password || "" });
   if (credentials?.email && credentials?.password) sessionCredentials.set(sessionId, { email: credentials.email, password: credentials.password });
   else sessionCredentials.delete(sessionId);
 
@@ -840,8 +851,102 @@ ipcMain.handle("diagnose-proxy", async (_event, { proxy, url }) => {
       const isSocks = proto.startsWith("SOCKS");
 
       if (isSocks) {
-        // Can't do full SOCKS CONNECT tunnel in pure Node without extra libs — resolve as unsupported
-        resolve({ status: 0, error: "SOCKS diagnostic not supported — use HTTP/HTTPS proxies" });
+        // SOCKS4/5: establish a tunnel to the target host, then send a HEAD request.
+        const isSocks5 = proto === "SOCKS5";
+        const targetHost = parsed.hostname;
+        const targetPort = isTargetHttps ? 443 : (parseInt(parsed.port) || 80);
+        const net = require("net");
+        const socket = net.createConnection({ host: proxy.host, port: proxy.port });
+        socket.setTimeout(8000);
+        let step = "connect";
+        const failSocks = (err) => { socket.destroy(); resolve({ status: 0, error: err || "SOCKS failed" }); };
+        socket.on("timeout", () => failSocks("Timeout"));
+        socket.on("error", () => failSocks("Connection failed"));
+        socket.on("connect", () => {
+          if (isSocks5) {
+            step = "socks5-greeting";
+            socket.write(proxy.username
+              ? Buffer.from([0x05, 0x02, 0x00, 0x02])
+              : Buffer.from([0x05, 0x01, 0x00]));
+          } else {
+            step = "socks4-connect";
+            const hostBuf = require("net").isIP(targetHost) === 4
+              ? targetHost.split(".").map(Number)
+              : null;
+            if (!hostBuf) { failSocks("SOCKS4 requires IPv4 target"); return; }
+            const user = proxy.username ? Buffer.from(proxy.username + "\x00") : Buffer.from([0x00]);
+            const buf = Buffer.alloc(8 + user.length);
+            buf[0] = 0x04; buf[1] = 0x01;
+            buf.writeUInt16BE(targetPort, 2);
+            buf[4] = hostBuf[0]; buf[5] = hostBuf[1]; buf[6] = hostBuf[2]; buf[7] = hostBuf[3];
+            user.copy(buf, 8);
+            socket.write(buf);
+          }
+        });
+        socket.on("data", (data) => {
+          if (step === "socks5-greeting") {
+            if (data.length < 2 || data[0] !== 0x05) { failSocks("Bad SOCKS5 greeting"); return; }
+            if (data[1] === 0xFF) { failSocks("No acceptable auth method"); return; }
+            if (data[1] === 0x02 && proxy.username) {
+              step = "socks5-auth";
+              const u = Buffer.from(proxy.username || "");
+              const p = Buffer.from(proxy.password || "");
+              const buf = Buffer.alloc(3 + u.length + p.length);
+              buf[0] = 0x01; buf[1] = u.length; u.copy(buf, 2);
+              buf[2 + u.length] = p.length; p.copy(buf, 3 + u.length);
+              socket.write(buf);
+            } else {
+              step = "socks5-connect";
+              const hostNameBuf = Buffer.from(targetHost);
+              const buf = Buffer.alloc(7 + hostNameBuf.length);
+              buf[0] = 0x05; buf[1] = 0x01; buf[2] = 0x00; buf[3] = 0x03;
+              buf[4] = hostNameBuf.length; hostNameBuf.copy(buf, 5);
+              buf.writeUInt16BE(targetPort, 5 + hostNameBuf.length);
+              socket.write(buf);
+            }
+            return;
+          }
+          if (step === "socks5-auth") {
+            if (data.length < 2 || data[1] !== 0x00) { failSocks("SOCKS5 auth failed"); return; }
+            step = "socks5-connect";
+            const hostNameBuf = Buffer.from(targetHost);
+            const buf = Buffer.alloc(7 + hostNameBuf.length);
+            buf[0] = 0x05; buf[1] = 0x01; buf[2] = 0x00; buf[3] = 0x03;
+            buf[4] = hostNameBuf.length; hostNameBuf.copy(buf, 5);
+            buf.writeUInt16BE(targetPort, 5 + hostNameBuf.length);
+            socket.write(buf);
+            return;
+          }
+          if (step === "socks5-connect" || step === "socks4-connect") {
+            const tunnelOk = isSocks5
+              ? (data[0] === 0x05 && data[1] === 0x00)
+              : (data[0] === 0x00 && data[1] === 0x5A);
+            if (!tunnelOk) { failSocks(isSocks5 ? `SOCKS5 error 0x${data[1]?.toString(16)}` : `SOCKS4 error 0x${data[1]?.toString(16)}`); return; }
+            // Tunnel open — send HEAD through it
+            if (isTargetHttps) {
+              const tlsSocket = require("tls").connect({ socket, servername: targetHost, rejectUnauthorized: false }, () => {
+                const path = parsed.pathname + (parsed.search || "");
+                tlsSocket.write(`HEAD ${path || "/"} HTTP/1.1\r\nHost: ${targetHost}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\nConnection: close\r\n\r\n`);
+              });
+              let raw = "";
+              tlsSocket.on("data", (c) => { raw += c.toString(); });
+              tlsSocket.on("end", () => {
+                const m = raw.match(/^HTTP\/\d+\.?\d* (\d{3})/);
+                socket.destroy(); resolve({ status: m ? parseInt(m[1]) : 0 });
+              });
+              tlsSocket.on("error", () => { socket.destroy(); resolve({ status: 0, error: "TLS error" }); });
+            } else {
+              const path = parsed.pathname + (parsed.search || "");
+              socket.write(`HEAD ${path || "/"} HTTP/1.1\r\nHost: ${targetHost}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\nConnection: close\r\n\r\n`);
+              let raw = "";
+              socket.on("data", (c) => { raw += c.toString(); });
+              socket.on("end", () => {
+                const m = raw.match(/^HTTP\/\d+\.?\d* (\d{3})/);
+                resolve({ status: m ? parseInt(m[1]) : 0 });
+              });
+            }
+          }
+        });
         return;
       }
 
@@ -916,37 +1021,129 @@ ipcMain.handle("check-proxy", async (_event, proxy) => {
     const isSocks = proxy.protocol?.toUpperCase().startsWith("SOCKS");
 
     if (isSocks) {
-      // SOCKS proxies require an external library — mark as unchecked from main process
-      // and fall back to a simple TCP connect check
+      // Perform a real SOCKS4/SOCKS5 handshake by attempting a CONNECT to 1.1.1.1:80.
+      // A successful tunnel open confirms the proxy actually routes traffic, not just TCP open.
       const net = require("net");
-      const socket = net.createConnection({ host: proxyHost, port: proxyPort }, () => {
-        socket.destroy();
-        resolve({ ok: true, responseTime: Date.now() - start });
+      const isSocks5 = proxy.protocol?.toUpperCase() === "SOCKS5";
+      const TEST_HOST_IP = [1, 1, 1, 1]; // 1.1.1.1 (Cloudflare, reliable test target)
+      const TEST_PORT = 80;
+
+      const socket = net.createConnection({ host: proxyHost, port: proxyPort });
+      socket.setTimeout(7000);
+
+      let step = "connect";
+
+      const fail = () => { socket.destroy(); resolve({ ok: false, responseTime: Date.now() - start }); };
+
+      socket.on("timeout", fail);
+      socket.on("error", fail);
+
+      socket.on("connect", () => {
+        if (isSocks5) {
+          // SOCKS5: send greeting — offer no-auth (0x00) and user/pass auth (0x02)
+          const hasAuth = !!(proxy.username);
+          step = "socks5-greeting";
+          socket.write(hasAuth
+            ? Buffer.from([0x05, 0x02, 0x00, 0x02])   // 2 methods: no-auth + user/pass
+            : Buffer.from([0x05, 0x01, 0x00]));         // 1 method: no-auth
+        } else {
+          // SOCKS4: send CONNECT request directly (no auth negotiation phase)
+          step = "socks4-connect";
+          const user = proxy.username ? Buffer.from(proxy.username + "\x00") : Buffer.from([0x00]);
+          const buf = Buffer.alloc(8 + user.length);
+          buf[0] = 0x04; buf[1] = 0x01;                         // version 4, CONNECT
+          buf.writeUInt16BE(TEST_PORT, 2);                       // dest port
+          buf[4] = TEST_HOST_IP[0]; buf[5] = TEST_HOST_IP[1];   // dest IP
+          buf[6] = TEST_HOST_IP[2]; buf[7] = TEST_HOST_IP[3];
+          user.copy(buf, 8);
+          socket.write(buf);
+        }
       });
-      socket.setTimeout(5000);
-      socket.on("timeout", () => { socket.destroy(); resolve({ ok: false }); });
-      socket.on("error", () => resolve({ ok: false }));
+
+      socket.on("data", (data) => {
+        if (step === "socks5-greeting") {
+          // Server chose auth method
+          if (data.length < 2 || data[0] !== 0x05) {
+            // If response starts with "HTTP/" (0x48 0x54 0x54 0x50) it's an HTTP proxy misconfigured as SOCKS
+            const isHttpResponse = data.length >= 4 && data[0] === 0x48 && data[1] === 0x54 && data[2] === 0x54 && data[3] === 0x50;
+            socket.destroy();
+            resolve({ ok: false, responseTime: Date.now() - start, protocolMismatch: isHttpResponse || undefined, hint: isHttpResponse ? "Responded as HTTP proxy — try switching protocol to HTTP" : undefined });
+            return;
+          }
+          const method = data[1];
+          if (method === 0xFF) { fail(); return; } // no acceptable method
+
+          if (method === 0x02 && proxy.username) {
+            // User/pass auth sub-negotiation
+            step = "socks5-auth";
+            const u = Buffer.from(proxy.username || "");
+            const p = Buffer.from(proxy.password || "");
+            const buf = Buffer.alloc(3 + u.length + p.length);
+            buf[0] = 0x01; buf[1] = u.length; u.copy(buf, 2);
+            buf[2 + u.length] = p.length; p.copy(buf, 3 + u.length);
+            socket.write(buf);
+          } else {
+            // No-auth or auth done — send CONNECT request
+            step = "socks5-connect";
+            socket.write(Buffer.from([
+              0x05, 0x01, 0x00, 0x01,          // version 5, CONNECT, reserved, IPv4
+              ...TEST_HOST_IP,                  // dest IP
+              (TEST_PORT >> 8) & 0xFF, TEST_PORT & 0xFF, // dest port
+            ]));
+          }
+          return;
+        }
+
+        if (step === "socks5-auth") {
+          // Auth response: [0x01, status] — status 0x00 means success
+          if (data.length < 2 || data[0] !== 0x01 || data[1] !== 0x00) { fail(); return; }
+          step = "socks5-connect";
+          socket.write(Buffer.from([
+            0x05, 0x01, 0x00, 0x01,
+            ...TEST_HOST_IP,
+            (TEST_PORT >> 8) & 0xFF, TEST_PORT & 0xFF,
+          ]));
+          return;
+        }
+
+        if (step === "socks5-connect" || step === "socks4-connect") {
+          // SOCKS5: [0x05, 0x00, ...] = success; SOCKS4: [0x00, 0x5A, ...] = success
+          const ok = isSocks5
+            ? (data[0] === 0x05 && data[1] === 0x00)
+            : (data[0] === 0x00 && data[1] === 0x5A);
+          // Detect HTTP proxy responding to SOCKS4 CONNECT (starts with "HTTP/")
+          const isHttpResponse = !ok && data.length >= 4 && data[0] === 0x48 && data[1] === 0x54 && data[2] === 0x54 && data[3] === 0x50;
+          socket.destroy();
+          resolve({ ok, responseTime: Date.now() - start, protocolMismatch: isHttpResponse || undefined, hint: isHttpResponse ? "Responded as HTTP proxy — try switching protocol to HTTP" : undefined });
+        }
+      });
       return;
     }
 
-    const reqOptions = {
+    // HTTP/HTTPS proxy: open a CONNECT tunnel to 1.1.1.1:443 (same target used for SOCKS).
+    // A successful CONNECT confirms the proxy can route HTTPS traffic — the same requirement
+    // as reaching Walmart/Pokemon Center. Any non-200 response (e.g. 407, 403, 502) = fail.
+    const connectOptions = {
       host: proxyHost,
       port: proxyPort,
-      method: "HEAD",
-      path: testUrl,
-      headers: { Host: parsed.host },
-      timeout: 6000,
+      method: "CONNECT",
+      path: "1.1.1.1:443",
+      headers: { Host: "1.1.1.1:443" },
+      timeout: 7000,
     };
     if (proxy.username) {
       const auth = Buffer.from(`${proxy.username}:${proxy.password || ""}`).toString("base64");
-      reqOptions.headers["Proxy-Authorization"] = `Basic ${auth}`;
+      connectOptions.headers["Proxy-Authorization"] = `Basic ${auth}`;
     }
 
-    const req = http.request(reqOptions, () => {
-      resolve({ ok: true, responseTime: Date.now() - start });
+    const req = http.request(connectOptions);
+    req.on("connect", (_res, socket, _head) => {
+      const ok = _res.statusCode === 200;
+      socket.destroy();
+      resolve({ ok, responseTime: Date.now() - start });
     });
-    req.on("timeout", () => { req.destroy(); resolve({ ok: false }); });
-    req.on("error", () => resolve({ ok: false }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, responseTime: Date.now() - start }); });
+    req.on("error", () => resolve({ ok: false, responseTime: Date.now() - start }));
     req.end();
   });
 });
@@ -1494,6 +1691,15 @@ app.commandLine.appendSwitch("disable-blink-features", "AutomationControlled");
 // instead of querying the DB on every auth challenge.
 app.on("login", (_event, _webContents, _req, authInfo, callback) => {
   if (!authInfo.isProxy) { callback(); return; }
+  // Match on both host and port to avoid sending wrong credentials when multiple
+  // proxies share the same IP but different ports.
+  for (const [, p] of sessionProxies.entries()) {
+    if (p.host === authInfo.host && String(p.port) === String(authInfo.port) && p.username) {
+      callback(p.username, p.password || "");
+      return;
+    }
+  }
+  // Fallback: match host only (covers cases where authInfo.port is not populated)
   for (const [, p] of sessionProxies.entries()) {
     if (p.host === authInfo.host && p.username) {
       callback(p.username, p.password || "");

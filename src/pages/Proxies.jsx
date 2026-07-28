@@ -67,16 +67,20 @@ export default function Proxies() {
   const handleCheckGroup = async (e, group, groupProxies) => {
     e.stopPropagation();
     setCheckingGroup(group.id);
+    let mismatches = 0;
     await Promise.all(groupProxies.map(async (proxy) => {
       const result = await checkProxy(proxy);
+      if (result.protocolMismatch) mismatches++;
       await db.Proxy.update(proxy.id, {
         status: result.ok ? "healthy" : "unhealthy",
         response_time_ms: result.ok ? result.responseTime : null,
         last_checked: new Date().toISOString(),
         fail_count: result.ok ? 0 : (proxy.fail_count || 0) + 1,
+        health_hint: result.hint || null,
       });
     }));
-    toast.success(`Checked ${groupProxies.length} proxies in "${group.name}"`);
+    const mismatchNote = mismatches > 0 ? ` (${mismatches} protocol mismatch${mismatches > 1 ? "es" : ""} — check proxy types)` : "";
+    toast.success(`Checked ${groupProxies.length} proxies in "${group.name}"${mismatchNote}`);
     setCheckingGroup(null);
     loadProxies();
   };
@@ -188,18 +192,22 @@ export default function Proxies() {
   const handleCheckAll = async () => {
     setCheckingAll(true);
     const activeProxies = proxies.filter((p) => p.is_active);
+    let mismatches = 0;
     await Promise.all(
       activeProxies.map(async (proxy) => {
         const result = await checkProxy(proxy);
+        if (result.protocolMismatch) mismatches++;
         await db.Proxy.update(proxy.id, {
           status: result.ok ? "healthy" : "unhealthy",
           response_time_ms: result.ok ? result.responseTime : null,
           last_checked: new Date().toISOString(),
           fail_count: result.ok ? 0 : (proxy.fail_count || 0) + 1,
+          health_hint: result.hint || null,
         });
       })
     );
-    toast.success(`Checked ${activeProxies.length} proxies`);
+    const mismatchNote = mismatches > 0 ? ` — ${mismatches} protocol mismatch${mismatches > 1 ? "es" : ""} detected` : "";
+    toast.success(`Checked ${activeProxies.length} proxies${mismatchNote}`);
     setCheckingAll(false);
     loadProxies();
   };

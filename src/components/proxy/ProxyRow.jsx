@@ -16,8 +16,15 @@ export default function ProxyRow({ proxy, onUpdate }) {
       response_time_ms: result.ok ? result.responseTime : null,
       last_checked: new Date().toISOString(),
       fail_count: result.ok ? 0 : (proxy.fail_count || 0) + 1,
+      health_hint: result.hint || null,
     });
-    toast[result.ok ? "success" : "error"](result.ok ? "Proxy is healthy" : "Proxy is unreachable");
+    if (result.ok) {
+      toast.success(`Proxy is healthy (${result.responseTime}ms)`);
+    } else if (result.protocolMismatch) {
+      toast.error(`Protocol mismatch: ${result.hint}`);
+    } else {
+      toast.error("Proxy is unreachable");
+    }
     setChecking(false);
     onUpdate?.();
   };
