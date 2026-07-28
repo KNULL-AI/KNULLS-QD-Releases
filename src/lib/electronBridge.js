@@ -128,6 +128,38 @@ export function offSessionLoadFailed(wrapper) {
   }
 }
 
+/** Subscribe to proxy rotation events from the main process. Returns the wrapper to pass to off*. */
+export function onProxyRotated(cb) {
+  if (typeof window !== "undefined" && window.electronAPI?.onProxyRotated) {
+    return window.electronAPI.onProxyRotated(cb);
+  }
+  return cb;
+}
+
+export function offProxyRotated(wrapper) {
+  if (typeof window !== "undefined" && window.electronAPI?.offProxyRotated) {
+    window.electronAPI.offProxyRotated(wrapper);
+  }
+}
+
+export function onProxyRotationFailed(cb) {
+  if (typeof window !== "undefined" && window.electronAPI?.onProxyRotationFailed) {
+    return window.electronAPI.onProxyRotationFailed(cb);
+  }
+  return cb;
+}
+
+export function offProxyRotationFailed(wrapper) {
+  if (typeof window !== "undefined" && window.electronAPI?.offProxyRotationFailed) {
+    window.electronAPI.offProxyRotationFailed(wrapper);
+  }
+}
+
+/** Trigger proxy rotation for a failing session */
+export function rotateProxy(sessionId) {
+  return invoke("rotateProxy", sessionId);
+}
+
 export function offSessionCrashed(wrapper) {
   if (typeof window !== "undefined" && window.electronAPI?.offSessionCrashed) {
     window.electronAPI.offSessionCrashed(wrapper);

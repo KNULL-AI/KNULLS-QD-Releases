@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { Square, ExternalLink, RotateCcw, MonitorPlay, Flame, CheckCircle2, XCircle } from "lucide-react";
+import { Square, ExternalLink, RotateCcw, MonitorPlay, Flame, CheckCircle2, XCircle, RotateCw } from "lucide-react";
 import { db } from "@/lib/db";
 import StatusBadge from "@/components/proxy/StatusBadge";
 import toast from "react-hot-toast";
-import { launchBrowser, focusBrowser, killBrowser, startQueueTimer, stopQueueTimer } from "@/lib/electronBridge";
+import { launchBrowser, focusBrowser, killBrowser, startQueueTimer, stopQueueTimer, rotateProxy } from "@/lib/electronBridge";
 import SwapProxyDialog from "@/components/session/SwapProxyDialog";
 
 // Warmup duration in seconds — sessions show warming progress for this long after start
@@ -45,6 +45,29 @@ function WarmupBar({ startedAt }) {
 }
 
 export default function SessionCard({ session, onUpdate, selected, onToggleSelect }) {
+
+  const [rotatingSessionId, setRotatingSessionId] = useState(null);
+
+  const handleForceRotate = async () => {
+    if (!session.id || !session.proxy_id) {
+      toast.error("No proxy assigned to this session");
+      return;
+    }
+    
+    setRotatingSessionId(session.id);
+    try {
+      const result = await rotateProxy(session.id);
+      if (result?.ok) {
+        toast.success(`Rotating proxy (attempt ${result.attempt}/5)…`);
+      } else {
+        toast.error(`Rotation failed: ${result?.error || "Unknown error"}`);
+      }
+    } catch (err) {
+      toast.error(`Rotation error: ${err.message}`);
+    } finally {
+      setRotatingSessionId(null);
+    }
+  };
 
   const handleStop = async () => {
     killBrowser(session.id);
@@ -166,6 +189,15 @@ export default function SessionCard({ session, onUpdate, selected, onToggleSelec
         <button onClick={handleLaunchBrowser} className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 text-xs font-mono transition-colors">
           <MonitorPlay className="w-3 h-3" /> {session.browser === "brave" ? "🦁" : "🌐"} Open
         </button>
+        {isRunning && session.proxy_id && (
+          <button
+            onClick={handleForceRotate}
+            disabled={rotatingSessionId === session.id}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-mono transition-colors"
+          >
+            <RotateCw className={`w-3 h-3 ${rotatingSessionId === session.id ? "animate-spin" : ""}`} /> Force Rotate
+          </button>
+        )}
         <SwapProxyDialog session={session} onSwapped={onUpdate} />
         {session.proxy_id && (
           <button

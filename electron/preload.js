@@ -56,6 +56,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onSessionLoadFailed: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-load-failed", wrapper); return wrapper; },
   offSessionLoadFailed: (wrapper) => ipcRenderer.removeListener("session-load-failed", wrapper),
 
+  // Proxy rotation events — main notifies renderer when proxy is swapped or rotation fails
+  onProxyRotated: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("proxy-rotated", wrapper); return wrapper; },
+  offProxyRotated: (wrapper) => ipcRenderer.removeListener("proxy-rotated", wrapper),
+  onProxyRotationFailed: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("proxy-rotation-failed", wrapper); return wrapper; },
+  offProxyRotationFailed: (wrapper) => ipcRenderer.removeListener("proxy-rotation-failed", wrapper),
+  rotateProxy: (sessionId) => ipcRenderer.invoke("rotate-proxy", { sessionId }),
+
   // Session launch diagnostics — main notifies renderer when browser windows are spawned
   onSessionLaunched: (cb) => { const wrapper = (_e, data) => cb(data); ipcRenderer.on("session-launched", wrapper); return wrapper; },
   offSessionLaunched: (wrapper) => ipcRenderer.removeListener("session-launched", wrapper),
