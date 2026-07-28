@@ -324,8 +324,12 @@ const browserWindows = new Map();
 const webContentsToSessionId = new Map(); // webContents.id -> sessionId
 // Cache the proxy assigned to each session so the app-level "login" handler
 // can resolve 407 proxy auth challenges in O(1) instead of querying the DB.
-const sessionProxies = new Map(); // sessionId → { host, username, password }
+const sessionProxies = new Map(); // sessionId → { host, port, username, password }
 const sessionCredentials = new Map(); // sessionId → { email, password }
+
+// Proxy rotation tracking: sessionId → { attempts: 0, blacklistedProxyIds: Set, taskGroupId, originalProxyGroupId, lastRotatedAt }
+// Tracks rotation attempts per session to prevent infinite loops; blacklists failed proxies within session
+const sessionRotationState = new Map();
 
 // Sessions launched as manual-open — closing won't fire session-crashed
 const manualOpenSessions = new Set();
@@ -342,6 +346,22 @@ function clearQueueTimer(sessionId) {
   }
   timerMeta.delete(sessionId);
   queuePersistMeta.delete(sessionId);
+}
+
+function initSessionRotationState(sessionId, taskGroupId = null, proxyGroupId = null) {
+  if (!sessionRotationState.has(sessionId)) {
+    sessionRotationState.set(sessionId, {
+      attempts: 0,
+      blacklistedProxyIds: new Set(),
+      taskGroupId,
+      originalProxyGroupId: proxyGroupId,
+      lastRotatedAt: null,
+    });
+  }
+}
+
+function clearSessionRotationState(sessionId) {
+  sessionRotationState.delete(sessionId);
 }
 
 function getSessionIdByWebContents(webContents) {
@@ -406,6 +426,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     }
     try { existing.destroy(); } catch (_) {}
     browserWindows.delete(sessionId);
+    clearSessionRotationState(sessionId);
   }
 
   // Each session gets its own cookie/storage partition by default.
@@ -548,6 +569,8 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
         url: validatedURL || url,
         proxy: proxy ? { host: proxy.host, port: proxy.port, protocol: proxy.protocol } : null,
       });
+      // Trigger auto-rotation on proxy errors
+      mainWindow.webContents.send("trigger-proxy-rotation", { sessionId });
     }
   });
 
@@ -691,6 +714,44 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
     });
   }
 
+  // Content error detection: scan for Pokemon Center errors after load
+  // Detects Error 43 (proxy connection), Error 15/17 (access denied), explicit error pages
+  // Note: Blank pages are NOT flagged as errors since websites legitimately fail to load under heavy load
+  if (!noPreload) {
+    win.webContents.on("did-finish-load", () => {
+      if (win.isDestroyed()) return;
+      // Wait 10s then check for error page indicators
+      setTimeout(() => {
+        if (win.isDestroyed()) return;
+        win.webContents.executeJavaScript(`
+          (function() {
+            const text = document.body?.innerText || '';
+            const html = document.documentElement?.outerHTML || '';
+            
+            // Detect specific error patterns (explicit errors only, not blank pages)
+            const errorPatterns = [
+              /Error 43|too many connections/i,  // Proxy connection errors
+              /Error 15|Error 17|access denied|blocked by our security/i,  // Bot detection/security
+              /Oops!.*Something's gone wrong/i,  // Generic error page
+              /temporary unavailable/i,  // Temporarily unavailable
+              /Imperva|imperva/,  // Imperva security blocking
+            ];
+            
+            const hasError = errorPatterns.some(p => p.test(text) || p.test(html));
+            
+            if (hasError) {
+              window.__knull_content_error = {
+                type: 'error_page',
+                detected: true,
+                errorText: text.slice(0, 500),
+              };
+            }
+          })()
+        `).catch(() => {});
+      }, 10000);
+    });
+  }
+
   win.loadURL(url);
   mainDebug(`[knull] loadURL issued session=${sessionId}`);
 
@@ -701,6 +762,7 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   if (proxy) sessionProxies.set(sessionId, { host: proxy.host, port: proxy.port, username: proxy.username, password: proxy.password || "" });
   if (credentials?.email && credentials?.password) sessionCredentials.set(sessionId, { email: credentials.email, password: credentials.password });
   else sessionCredentials.delete(sessionId);
+  initSessionRotationState(sessionId);
 
   const accountEmail = credentials?.email || null;
   mainDebug(`[knull] Launched BrowserWindow session ${sessionId} manualOpen=${manualOpen} account=${accountEmail || "none"} → ${url} via ${proxy ? `${proxy.protocol || "HTTP"} ${proxy.host}:${proxy.port} auth=${!!proxy.username}` : "no proxy"}`);
@@ -718,6 +780,157 @@ ipcMain.handle("launch-browser", async (_event, { sessionId, url, proxy, userAge
   mainDebug(`[knull] launch-browser finished session=${sessionId}`);
   updateTray();
   return { ok: true };
+});
+
+// ── IPC: Auto-rotate proxy on content/network errors ────────────────────────
+ipcMain.handle("rotate-proxy", async (_event, { sessionId }) => {
+  const win = browserWindows.get(sessionId);
+  if (!win || win.isDestroyed()) return { ok: false, error: "Session window not found" };
+
+  const rotationState = sessionRotationState.get(sessionId);
+  if (!rotationState) return { ok: false, error: "Rotation state not initialized" };
+
+  // Prevent infinite rotation loops — max 6 attempts (try original + 5 alternates)
+  if (rotationState.attempts >= 5) {
+    const msg = `Proxy rotation exhausted after 5 attempts for session ${sessionId}`;
+    console.warn("[knull]", msg);
+    const db = getDb();
+    if (db) {
+      db.prepare(`INSERT INTO "SystemLog" (id, created_date, updated_date, data) VALUES (?, ?, ?, ?)`).run(
+        newId(), new Date().toISOString(), new Date().toISOString(),
+        JSON.stringify({ level: "error", source: "ProxyRotation", message: msg })
+      );
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("proxy-rotation-failed", { sessionId, reason: "Max attempts exceeded" });
+    }
+    return { ok: false, error: "Max rotation attempts exceeded" };
+  }
+
+  try {
+    const db = getDb();
+    if (!db) return { ok: false, error: "Database unavailable" };
+
+    // Get current session proxy info
+    const currentProxy = sessionProxies.get(sessionId);
+    const sessionRecord = db.prepare(`SELECT * FROM "BrowserSession" WHERE id = ?`).get(sessionId);
+    if (!sessionRecord) return { ok: false, error: "Session record not found" };
+
+    const session = JSON.parse(sessionRecord.data);
+    const proxyGroupId = session.proxy_group_id;
+
+    if (!proxyGroupId) {
+      return { ok: false, error: "No proxy group assigned to session" };
+    }
+
+    // Get proxy group and its proxies
+    const groupRecord = db.prepare(`SELECT * FROM "ProxyGroup" WHERE id = ?`).get(proxyGroupId);
+    if (!groupRecord) return { ok: false, error: "Proxy group not found" };
+
+    const proxyGroup = JSON.parse(groupRecord.data);
+    const proxyIds = proxyGroup.proxy_ids || [];
+
+    // Find a healthy proxy not in the blacklist
+    let nextProxy = null;
+    for (const proxyId of proxyIds) {
+      if (rotationState.blacklistedProxyIds.has(proxyId)) continue;
+
+      const proxyRecord = db.prepare(`SELECT * FROM "Proxy" WHERE id = ?`).get(proxyId);
+      if (!proxyRecord) continue;
+
+      const proxyData = JSON.parse(proxyRecord.data);
+      if (proxyData.status === "healthy") {
+        nextProxy = { id: proxyId, ...proxyData };
+        break;
+      }
+    }
+
+    if (!nextProxy) {
+      return { ok: false, error: "No healthy proxies available in group" };
+    }
+
+    // Blacklist the current proxy and increment rotation count
+    if (currentProxy) {
+      const allProxies = db.prepare(`SELECT * FROM "Proxy"`).all();
+      for (const row of allProxies) {
+        const p = JSON.parse(row.data);
+        if (p.host === currentProxy.host && p.port === currentProxy.port) {
+          rotationState.blacklistedProxyIds.add(row.id);
+          break;
+        }
+      }
+    }
+    rotationState.attempts += 1;
+    rotationState.lastRotatedAt = new Date().toISOString();
+
+    // Update session in DB with new proxy
+    const updatedSession = {
+      ...session,
+      proxy_id: nextProxy.id,
+      proxy_label: `${nextProxy.protocol || "HTTP"}://${nextProxy.host}:${nextProxy.port}`,
+    };
+    db.prepare(`UPDATE "BrowserSession" SET data = ? WHERE id = ?`).run(
+      JSON.stringify(updatedSession),
+      sessionId
+    );
+
+    // Apply proxy to the session and reload the page
+    const partition = win.webPreferences?.session?.partition || `persist:knull-${sessionId}`;
+    const ses = require("electron").session.fromPartition(partition);
+    const proto = (nextProxy.protocol || "HTTP").toUpperCase();
+    let schemePrefix;
+    if (proto === "SOCKS5") schemePrefix = "socks5";
+    else if (proto === "SOCKS4") schemePrefix = "socks4";
+    else schemePrefix = "http";
+
+    const proxyUrl = `${schemePrefix}://${nextProxy.host}:${nextProxy.port}`;
+    await ses.setProxy({ proxyRules: proxyUrl });
+
+    // Handle proxy auth if needed
+    if (nextProxy.username) {
+      ses.removeAllListeners("login");
+      ses.on("login", (_req, authInfo, callback) => {
+        if (nextProxy.username && authInfo.isProxy) {
+          callback(nextProxy.username, nextProxy.password || "");
+        } else {
+          callback();
+        }
+      });
+    }
+
+    // Update cached proxy for login handler
+    sessionProxies.set(sessionId, {
+      host: nextProxy.host,
+      port: nextProxy.port,
+      username: nextProxy.username || "",
+      password: nextProxy.password || "",
+    });
+
+    // Reload the page with new proxy
+    win.webContents.reload();
+
+    const msg = `Session ${sessionId} rotated to proxy ${nextProxy.host}:${nextProxy.port} (attempt ${rotationState.attempts}/5)`;
+    console.log("[knull]", msg);
+    if (db) {
+      db.prepare(`INSERT INTO "SystemLog" (id, created_date, updated_date, data) VALUES (?, ?, ?, ?)`).run(
+        newId(), new Date().toISOString(), new Date().toISOString(),
+        JSON.stringify({ level: "info", source: "ProxyRotation", message: msg })
+      );
+    }
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("proxy-rotated", {
+        sessionId,
+        newProxy: { host: nextProxy.host, port: nextProxy.port },
+        attempt: rotationState.attempts,
+      });
+    }
+
+    return { ok: true, proxy: nextProxy, attempt: rotationState.attempts };
+  } catch (err) {
+    console.error("[knull] rotate-proxy error:", err);
+    return { ok: false, error: err.message || String(err) };
+  }
 });
 
 // ── IPC: Discord OAuth2 SSO login ─────────────────────────────────────────────

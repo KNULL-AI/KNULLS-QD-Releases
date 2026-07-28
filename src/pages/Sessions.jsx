@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import LaunchSessionDialog from "@/components/session/LaunchSessionDialog";
 import SessionCard from "@/components/session/SessionCard";
 import toast from "react-hot-toast";
-import { killBrowser, launchBrowser, onSessionCrashed, offSessionCrashed, onSessionLoadFailed, offSessionLoadFailed, onAllSessionsKilled, offAllSessionsKilled } from "@/lib/electronBridge";
+import { killBrowser, launchBrowser, onSessionCrashed, offSessionCrashed, onSessionLoadFailed, offSessionLoadFailed, onProxyRotated, offProxyRotated, onProxyRotationFailed, offProxyRotationFailed, onAllSessionsKilled, offAllSessionsKilled } from "@/lib/electronBridge";
 
 export default function Sessions() {
   const [sessions, setSessions] = useState([]);
@@ -77,6 +77,22 @@ export default function Sessions() {
     };
     const sub = onSessionLoadFailed(wrapper);
     return () => offSessionLoadFailed(sub ?? wrapper);
+  }, []);
+
+  // Proxy rotation events — notify user when rotation occurs
+  useEffect(() => {
+    const rotatedWrapper = ({ sessionId, newProxy, attempt }) => {
+      toast.success(`Proxy rotated to ${newProxy.host}:${newProxy.port} (attempt ${attempt}/5)`, { id: `rotate-${sessionId}`, duration: 3000 });
+    };
+    const failedWrapper = ({ sessionId, reason }) => {
+      toast.error(`Proxy rotation failed: ${reason}`, { id: `rotate-fail-${sessionId}`, duration: 5000 });
+    };
+    const sub1 = onProxyRotated(rotatedWrapper);
+    const sub2 = onProxyRotationFailed(failedWrapper);
+    return () => {
+      offProxyRotated(sub1 ?? rotatedWrapper);
+      offProxyRotationFailed(sub2 ?? failedWrapper);
+    };
   }, []);
 
   // Refresh session list when tray kills all sessions
