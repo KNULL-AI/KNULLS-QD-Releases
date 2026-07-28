@@ -10,7 +10,7 @@ database_id = "15a6141f-668b-4802-9607-e68be7a3a74c"
 [vars]
 TRIGGER_WS_URL = ""
 STRICT_GLOBAL_TRIGGER_INGRESS = "true"
-ALLOWED_TRIGGER_SENDERS = "local-windows-main"
+ALLOWED_TRIGGER_SENDERS = "local-windows-main,discord-bot-main"
 TRIGGER_DEBUG_LOGS = "false"
 
 [[durable_objects.bindings]]

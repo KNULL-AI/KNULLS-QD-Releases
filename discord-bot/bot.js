@@ -39,7 +39,7 @@ const TRIGGER_API = {
 };
 
 const BOT_SENDER_ID = String(process.env.DISCORD_BOT_SENDER_ID || '').trim()
-  || `${os.hostname()}:${process.pid}`;
+  || 'discord-bot-main';
 
 const ALERT_DEDUPE_WINDOW_MS = Number(process.env.ALERT_DEDUPE_WINDOW_MS || 10000);
 const recentAlertFingerprints = new Map();
@@ -157,6 +157,18 @@ function parseWalmartAlert(embeds) {
   while ((match = urlRegex.exec(links)) !== null) {
     urls.push(match[2]);
   }
+
+  // Also check each field value for bare or markdown URLs (e.g. ATC field)
+  for (const field of embed.fields || []) {
+    const fieldVal = field.value || '';
+    const bareUrl = fieldVal.match(/^https?:\/\/\S+/);
+    if (bareUrl) urls.push(bareUrl[0]);
+    const mdUrl = fieldVal.match(/\[.*?\]\((https?[^\)]+)\)/);
+    if (mdUrl) urls.push(mdUrl[1]);
+  }
+
+  // Fallback: embed.url is the title hyperlink (e.g. goto.walmart.com queue alerts)
+  if (embed.url) urls.push(embed.url);
 
   const uniqueUrls = Array.from(new Set(urls.map((u) => String(u || '').trim()).filter(Boolean)));
 
