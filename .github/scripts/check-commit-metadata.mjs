@@ -53,7 +53,12 @@ try {
   if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
     check(event.pull_request.head.sha, event.pull_request.base.sha);
   } else if (process.env.GITHUB_EVENT_NAME === 'push') {
-    if (!event.deleted) check(event.after, event.before);
+    if (!oid(event.before) || !oid(event.after)
+      || (event.forced !== undefined && typeof event.forced !== 'boolean')
+      || (event.deleted !== undefined && typeof event.deleted !== 'boolean')) throw new Error('invalid-push-event');
+    // An old force-push boundary can be absent from a fresh clone. Check all
+    // incoming ancestors instead; never skip the check or fetch removed history.
+    if (!event.deleted) check(event.after, event.forced === true ? null : event.before);
   } else throw new Error('unsupported-event');
   if (findings.length) {
     console.error('Commit metadata privacy failed. Replace personal identities in affected commits before publishing.');
@@ -63,7 +68,7 @@ try {
     process.exitCode = 1;
   } else console.log(`Commit metadata privacy passed: ${count} commits checked.`);
 } catch (error) {
-  const reason = /^(?:git-history-unavailable|invalid-history-boundary|invalid-history-object|invalid-tag-chain|unsupported-event)$/.test(error?.message || '') ? error.message : 'check-unavailable';
+  const reason = /^(?:git-history-unavailable|invalid-history-boundary|invalid-history-object|invalid-tag-chain|invalid-push-event|unsupported-event)$/.test(error?.message || '') ? error.message : 'check-unavailable';
   console.error(`Commit metadata privacy failed: ${reason}. No unverified history is considered clean.`);
   process.exitCode = 1;
 }
