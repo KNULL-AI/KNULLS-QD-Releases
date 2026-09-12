@@ -1,74 +1,44 @@
+#!/usr/bin/env node
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
-
-// Public repository policy only. No application source, credentials or user data.
-const allowedEmail = (value) => {
-  const email = String(value || '').trim().toLowerCase();
-  return email === 'dev@knull.local' || email === 'noreply@github.com'
-    || /^(?:\d+\+)?[a-z0-9][a-z0-9-]*(?:\[bot\])?@users\.noreply\.github\.com$/.test(email);
-};
-const oid = (value) => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
-const findings = [];
-let count = 0;
-const git = (args, input) => {
-  try {
-    return execFileSync('git', args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 }).trim();
-  } catch { throw new Error('git-history-unavailable'); }
-};
-function identity(raw, role, object) {
-  const match = /^([^<>\r\n]+) <([^<>\r\n]+)>\s+\d+\s+[+-]\d{4}$/.exec(String(raw));
-  if (!match || !allowedEmail(match[2])) findings.push({ object, role });
-  if (match && /[^\s@]+@[^\s@]+\.[^\s@]+/.test(match[1])) findings.push({ object, role: `${role}-name` });
-}
-function peel(object) {
-  if (!oid(object) || /^0+$/.test(object)) throw new Error('invalid-history-boundary');
-  const commit = git(['rev-parse', '--verify', `${object}^{commit}`]);
-  if (!oid(commit)) throw new Error('invalid-history-boundary');
-  return commit;
-}
-function check(head, base) {
-  const tip = peel(head);
-  const from = base && !/^0+$/.test(base) ? peel(base) : null;
-  const objects = git(['rev-list', '--stdin'], [tip, ...(from ? [`^${from}`] : [])].join('\n') + '\n');
-  for (const object of objects.split('\n').filter(Boolean)) {
-    if (!oid(object)) throw new Error('invalid-history-object');
-    const header = git(['cat-file', '-p', object]).split(/\r?\n\r?\n/, 1)[0];
-    identity(/^author (.+)$/m.exec(header)?.[1], 'author', object);
-    identity(/^committer (.+)$/m.exec(header)?.[1], 'committer', object);
-    count++;
-  }
-  let object = head;
-  const seen = new Set();
-  while (git(['cat-file', '-t', object]) === 'tag') {
-    if (seen.has(object) || seen.size >= 32) throw new Error('invalid-tag-chain');
-    seen.add(object);
-    const header = git(['cat-file', '-p', object]).split(/\r?\n\r?\n/, 1)[0];
-    identity(/^tagger (.+)$/m.exec(header)?.[1], 'tagger', object);
-    object = /^object ([a-f0-9]+)$/m.exec(header)?.[1];
-    if (!oid(object)) throw new Error('invalid-tag-chain');
-  }
-}
 try {
-  const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-  if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
-    check(event.pull_request.head.sha, event.pull_request.base.sha);
-  } else if (process.env.GITHUB_EVENT_NAME === 'push') {
-    if (!oid(event.before) || !oid(event.after)
-      || (event.forced !== undefined && typeof event.forced !== 'boolean')
-      || (event.deleted !== undefined && typeof event.deleted !== 'boolean')) throw new Error('invalid-push-event');
-    // An old force-push boundary can be absent from a fresh clone. Check all
-    // incoming ancestors instead; never skip the check or fetch removed history.
-    if (!event.deleted) check(event.after, event.forced === true ? null : event.before);
-  } else throw new Error('unsupported-event');
-  if (findings.length) {
-    console.error('Commit metadata privacy failed. Replace personal identities in affected commits before publishing.');
-    for (const { object, role } of findings.slice(0, 25)) console.error(`  ${object.slice(0, 12)}: ${role} email`);
-    if (findings.length > 25) console.error(`  ${findings.length - 25} additional findings`);
-    console.error('Values redacted. Use your own GitHub noreply identity for both author and committer.');
+  // Load inside the redacted error boundary: a missing module must not print a
+  // local absolute path or silently skip metadata verification.
+  const { createMetadataInspector } = await import('./commitMetadataPrivacy.mjs');
+  const inspector = createMetadataInspector();
+  const [mode, ...args] = process.argv.slice(2);
+  if (mode === '--current' && args.length === 0) inspector.current();
+  else if (mode === '--pre-push' && args.length === 1) inspector.push(fs.readFileSync(0, 'utf8'), args[0]);
+  else if (mode === '--range' && args.length === 2) inspector.range([inspector.resolveRevision(args[1])], [inspector.resolveRevision(args[0])]);
+  else if (mode === '--all-reachable' && args.length === 1) inspector.range([inspector.resolveRevision(args[0])]);
+  // Preserve the old no-argument workflow adapter. Repository policy disables
+  // Actions; local checks below do not require an event file or hosted runner.
+  else if ((mode === '--ci' || mode === undefined) && args.length === 0) {
+    const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+    if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
+      inspector.range([event.pull_request.head.sha], [event.pull_request.base.sha]);
+    } else if (process.env.GITHUB_EVENT_NAME === 'push') {
+      const oid = (value) => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
+      if (!oid(event.before) || !oid(event.after)
+        || (event.forced !== undefined && typeof event.forced !== 'boolean')
+        || (event.deleted !== undefined && typeof event.deleted !== 'boolean')) throw new Error('metadata-invalid-ci-event');
+      // A rewritten before-object need not exist in a fresh checkout. Inspecting
+      // all incoming ancestry is stronger than excluding that vanished boundary.
+      if (!event.deleted) inspector.range([event.after], event.forced === true || /^0+$/.test(event.before) ? [] : [event.before]);
+    } else throw new Error('metadata-unsupported-ci-event');
+  } else throw new Error('metadata-invalid-arguments');
+  const result = inspector.result();
+  if (!result.ok) {
+    console.error('commit metadata privacy: refused; personal or unapproved email identity found.');
+    for (const finding of result.findings.slice(0, 25)) {
+      console.error(`  ${finding.object === 'pending' ? 'pending commit' : finding.object.slice(0, 12)}: ${finding.field} email`);
+    }
+    if (result.findings.length > 25) console.error(`  ${result.findings.length - 25} additional identity findings`);
+    console.error('Use your GitHub noreply identity for both author and committer; release automation may use the documented KNULL identity.');
+    console.error('Values are redacted. Correct affected local commits before pushing; changing git config does not repair old commits.');
     process.exitCode = 1;
-  } else console.log(`Commit metadata privacy passed: ${count} commits checked.`);
+  } else console.log(`commit metadata privacy: passed (${result.commits} commits, ${result.tags} annotated tags checked).`);
 } catch (error) {
-  const reason = /^(?:git-history-unavailable|invalid-history-boundary|invalid-history-object|invalid-tag-chain|invalid-push-event|unsupported-event)$/.test(error?.message || '') ? error.message : 'check-unavailable';
-  console.error(`Commit metadata privacy failed: ${reason}. No unverified history is considered clean.`);
+  const reason = /^metadata-[a-z-]+$/.test(error?.message || '') ? error.message : 'metadata-check-failed';
+  console.error(`commit metadata privacy: refused; ${reason}. No unverified push is allowed. Fetch the needed history if an object is unavailable.`);
   process.exitCode = 1;
 }

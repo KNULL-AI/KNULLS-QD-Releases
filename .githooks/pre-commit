@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if ! command -v node >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
+  echo "pre-commit: refused; Node.js and Git are required for metadata verification." >&2
+  exit 1
+fi
+checker="${0%/*}/../.github/scripts/check-commit-metadata.mjs"
+if [ ! -f "$checker" ]; then
+  echo "pre-commit: refused; metadata verifier is unavailable." >&2
+  exit 1
+fi
+exec node "$checker" --current

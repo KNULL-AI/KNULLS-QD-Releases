@@ -5,6 +5,9 @@ drops.
 
 **[Download Latest Release →](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases/latest)**
 
+Repository contributors: install the [local commit privacy checks](.github/LOCAL-VERIFICATION.md)
+in each clone. Release builds and verification run locally; GitHub Actions is not used.
+
 ---
 
 ## What it does

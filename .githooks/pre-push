@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if ! command -v node >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
+  echo "pre-push: refused; Node.js and Git are required for metadata verification." >&2
+  exit 1
+fi
+checker="${0%/*}/../.github/scripts/check-commit-metadata.mjs"
+if [ ! -f "$checker" ]; then
+  echo "pre-push: refused; metadata verifier is unavailable." >&2
+  exit 1
+fi
+# Git supplies each proposed ref update on stdin and the remote name as $1.
+# Forward stdin directly so the verifier checks every update in this push.
+exec node "$checker" --pre-push "$1"
