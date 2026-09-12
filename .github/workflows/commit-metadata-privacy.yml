@@ -1,0 +1,24 @@
+name: Commit metadata privacy
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Commit metadata privacy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check every incoming author and committer
+        run: node .github/scripts/check-commit-metadata.mjs
