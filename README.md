@@ -1,256 +1,244 @@
 # KNULL Queue Destroyer
 
-Desktop app for running browser sessions on Walmart, Pokémon Center and Costco
-drops.
+Desktop app for managing Walmart, Pokémon Center and Costco browser sessions.
 
-**[Download Latest Release →](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases/latest)**
+**[Download the latest release](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases/latest)** · [Release notes](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases)
 
-Repository contributors: install the [local commit privacy checks](.github/LOCAL-VERIFICATION.md)
-in each clone. Release builds and verification run locally; GitHub Actions is not used.
+This guide describes **1.1.77**. Use the release notes to check which features are included in your installed version.
 
----
+## Start here
 
-## What it does
+1. Install the app and activate your license.
+2. Add the accounts and connections your retailer needs.
+3. Create one small task group and confirm it can open its browser.
+4. Follow the [Walmart](#walmart), [Costco](#costco) or [Pokémon Center](#pokémon-center) steps below.
+5. Set up [challenge harvesters](#challenges-and-harvesters) and optional automatic triggers before increasing your session count.
 
-- Runs many browser sessions at once, each with its own proxy and its own
-  persistent profile
-- Keeps accounts signed in between drops, so a second drop does not repeat the
-  first drop's login
-- Fills Walmart login codes automatically from your email
-- Watches Discord channels for drop alerts and starts your sessions for you
-- Shows every session's live phase in one table, and sends alerts when a session
-  gets through
-- Opens a window for you when a challenge needs a person
+The app prepares and monitors sessions. Complete any required verification and checkout in the retailer's browser. A ready account, cleared challenge or queue admission does not guarantee inventory or a successful purchase.
 
----
-
-## Installation
+## Install and update
 
 ### Windows
 
-1. Download `KNULL-Queue-Destroyer-Setup-x.y.z.exe` from the latest release
-2. Run it and follow the prompts
-3. Launch from the Start Menu or the desktop shortcut
+1. Open the latest release and download `KNULL-Queue-Destroyer-Setup-x.y.z.exe`.
+2. Run the installer and follow its prompts.
+3. Launch the app from the Start Menu or desktop shortcut.
 
 ### macOS
 
-1. Download `KNULL-Queue-Destroyer-x.y.z-arm64.dmg`
-2. Mount it and drag the app to Applications
-3. Launch normally — current builds are signed and notarized
+Download the release's `KNULL-Queue-Destroyer-x.y.z-arm64.dmg`, open it and drag the app into Applications. macOS builds support **Apple Silicon**. Check the release's actual assets: a Windows release may be available before its macOS build. Use the latest release that includes your platform.
 
-**Apple Silicon only** — there is no Intel build. Windows and macOS ship under
-the same version tag; if the newest release has no mac files yet, use the newest
-one that does. On an older unsigned build, right-click → **Open** the first time.
+### Updates
 
----
+Open **Settings → General → App Updates → Check for Updates** to see your version and check manually. Install between runs. **Auto Update** can restart the app and interrupt running browsers; keep it off while participating in a drop.
 
 ## First-time setup
 
-Work through these in order. Each step depends on the one before it.
+### Activate
 
-### 1. Activate
+Enter your license key on the Activation screen. **Settings → General → Sign Out / Re-activate** clears the activation session. It keeps a locally saved key; **Forget Saved Key** removes that saved key from the device.
 
-Enter your license key on the Activation screen. Keys are tied to one device —
-if you need to move machines, use **Settings → Sign Out / Re-activate** on the
-old one first.
+### Add connections
 
-### 2. Add proxies
+In **Proxy Pool**, create a proxy group, select it and use **Add Proxies**. Supported entry formats include `host:port` and `host:port:user:pass`. Use **Test Proxies** and inspect the result before assigning the group.
 
-**Proxies → Add**, then create a proxy group. Residential proxies are what these
-sites expect; datacenter addresses are usually refused before you see a page.
+A connection test confirms connectivity at that moment. It does not establish that a retailer will accept the connection. Keep connections stable while accounts are signed in or holding queue progress.
 
-One proxy is used per session. If you plan to run twenty sessions, you want
-twenty proxies — the app will share them rather than refuse to start, and it
-will warn you on screen when it has to, but sharing an address across accounts
-is visible to the retailer.
+Costco has separate account sign-in and task connections; use its [connection table](#costco-connections) below. For other retailers, review both the task group's proxy pool and any account-specific assignment before launching.
 
-### 3. Add accounts
+### Add accounts
 
-**Accounts → Add**, in `email:password` format. Bulk paste works.
+Open **Accounts**, choose the retailer, then **Add Account**. Enter a label and email, plus a password where required. Accounts are added **one at a time**.
 
-Pokémon Center does not need accounts — it checks out as a guest — so this step
-is only for Walmart and Costco.
+- **Walmart:** assign your saved accounts to the Walmart task group. Configure IMAP if you want the app to retrieve email verification codes.
+- **Costco:** choose **Password** or **Email code (OTP)** for each account. Email-code mode does not require a password. Both pathways warm the account before sign-in. Additional verification can still require you.
+- **Pokémon Center:** task groups can run without assigned accounts. The Accounts page also offers Pokémon Center sign-in, but account reuse in task sessions is not yet verified.
 
-### 4. Create a task group
+### Set up email codes
 
-**Tasks → New Group**. A group ties together:
+In **Settings → IMAP**, use **Add** for each mailbox, enter its details, then **Save** and **Test**. Enable the mailbox with its switch and confirm polling is running. **Start all** and **Stop all** control the configured mailboxes together. Use the mailbox provider's required app password where applicable.
 
-- a retailer
-- the accounts it will use
-- the proxy group it draws from
-- how many sessions to run
-- what to do when a session fails
+The app matches eligible retailer codes to the account requesting them. Mailbox connectivity alone does not confirm code delivery or successful sign-in. If a code is missing, check the account's email address, mailbox status and the actual retailer window.
 
-Groups are the unit everything else works on — you start, stop and trigger a
-group, not individual sessions.
+### Create a task group
 
-### 5. Set up email codes (Walmart)
+In **Tasks**, choose **New Group**, name it and select the retailer. Open **Configure** to assign accounts or an instance count, connections and launch pacing.
 
-**Settings → IMAP**. Walmart emails a code at login and the app fills it in for
-you. Run the test until it passes; if it does not, sessions will sit on
-**Logging In** forever.
+Two controls govern automatic triggers:
 
-### 6. Optional — Discord alerts
+| Control | Meaning |
+| --- | --- |
+| **Armed** | The group can respond to a matching trigger. Disarmed groups can still be launched manually. |
+| **Live drops** | On: real alerts. Off: test alerts. Check this before expecting a live drop to launch the group. |
 
-**Settings → Webhook** to receive alerts when a session gets through, and
-**Discord Monitor** to have drops start your groups automatically.
+Saving new defaults does not reroute a browser already running. Restarting a stopped session can apply the current proxy group. Read the change summary and launch preflight before applying the configuration to new sessions.
 
----
+## Walmart
 
-## Running a Walmart drop
+### Prepare and choose the product
 
-### The first time
+1. Select your Walmart task group and assign its accounts and proxy pool.
+2. Use **Start All** or **Launch Pool** to prepare the accounts. No SKU is needed just to prepare.
+3. Confirm the sessions reach **Waiting for Product**. Open any account needing a code or manual verification.
+4. Enter a Walmart SKU or product URL in the selected group's **SKU** field. Set the drop time in **Eastern Time (ET)** and the **Lead** time, then choose **Apply SKU & Arm**.
+5. Check the displayed product and scheduled date/time in ET. The group shows **one armed SKU or no SKU armed**; it does not launch a list of historical SKUs.
+6. At the scheduled occurrence, eligible sessions navigate to that product. For an immediate manual dispatch, use **Drop Now** on the selected group and check its dispatch result.
 
-1. Click **Start** on your group — one browser opens per account at the login page
-2. Codes arrive by email and fill themselves in
-3. Sessions settle on **Waiting for Product**
-4. At drop time, paste the SKU into the **SKU field** and press Enter
-5. Sessions go to the product page and enter the queue
-6. Complete checkout yourself when your position comes up
+**Apply SKU & Arm schedules the product; it is not an immediate product launch.** Changing the time or lead disarms the schedule until you apply it again. Both the time input and armed summary use **Eastern Time (ET)**, with daylight-saving changes handled for New York. Enter the retailer's Eastern drop time regardless of your computer's timezone. If you missed the preparation lead, use **Start All** or **Launch Pool** yourself.
 
-### Every drop after that
+To change products, apply the replacement SKU to the same group and verify the displayed armed SKU. To stop automatic scheduling, turn off the schedule switch. Manual **Drop Now** can still use that group's last scheduled product, so review its button and result before clicking.
 
-Nothing to switch on. Each account keeps its own browser profile, so signed-in
-state carries over.
+### Read queue progress
 
-1. Click **Start** — accounts still signed in land straight on **Waiting for Product**
-2. Any account whose login has lapsed re-runs the login on its own
-3. Paste the SKU at drop time
+Keep **In Queue** sessions running. A waiting-page message such as “You are in!” or a countdown can still mean you are waiting; the app requires current admission evidence before treating it as a purchase window.
 
-> **Never stop a session that is In Queue.** You lose the place. Stop All skips
-> them on purpose.
+Open **Walmart run summary** in the session row for admission, product observation, cart and sign-in evidence, and when the page was last checked. A stale observation is a reason to inspect the browser; it is not proof that the queue ended. A successful dispatch means navigation was sent, not that every account entered the queue.
 
----
+When admitted, focus that session and complete checkout. Product availability and cart acceptance remain separate results.
 
-## Running a Pokémon Center drop
+## Costco
 
-Pokémon Center works differently from Walmart and it is worth knowing how before
-drop day.
+Costco drops launch from a **product link**. Preparing ahead of time reduces the work needed after an alert; you can also paste a product link and launch a cold account, which warms up first.
 
-- **No accounts and no sign-in.** Checkout is as a guest, so there is nothing to
-  log into and nothing to keep signed in between drops.
-- **There is a waiting room.** After the product goes live you are held on a
-  waiting page — the one with the animated character — and given a countdown that
-  moves up and down with traffic. The app reads that countdown and shows it.
-- **A challenge can appear at any point.** See below.
+### Costco connections
 
-The flow:
+| Setting | Where to set it | Used for |
+| --- | --- | --- |
+| Account login connection | **Accounts → Costco → Edit → Proxy Assignment** | Preparing and signing into the saved account profile. **None (direct)** is a useful starting setup; a proxy can be selected. |
+| **Task proxy pool** | Costco group's **Configure → Costco task connections** | Preparing the task browser, opening products and joining queues. |
+| **Optional Direct account** | Same task connection section | One selected account can use Direct instead of a task proxy. Only one Direct account is allowed across active Costco tasks. |
 
-1. Create a Pokémon Center group with a proxy group and a session count
-2. Start it before the drop so sessions are already on the site
-3. When the drop opens, sessions move to the waiting room on their own
-4. The session table shows the queue position or countdown as it changes
-5. When a session clears the waiting room you get an alert naming that session
-6. Go to that window and complete checkout
+Every other selected account needs an available task proxy with a distinct measured exit address. Multiple proxy entries may still share one exit address. The app checks for this before preparation and reports conflicts; it does not silently fall back to Direct or rotate a running task connection.
 
-Because there is no account, the alert names the **session**, not an email
-address — six windows look identical and only one of them is the one to go to.
+An account's additional queue tabs share its task connection and signed-in browser state. **You do not need a separate proxy for each tab.** Changing task connection settings does not change the saved account's login connection.
 
----
+### Prepare before the drop
 
-## When a challenge appears
+1. In **Accounts → Costco**, sign into each account using its selected method. Complete any verification in that account window and check its reported result.
+2. In the Costco group's **Configure** dialog, select those accounts, the **Task proxy pool** and, optionally, one **Direct account**.
+3. Set **Requested tabs per account** to **1** to start. This number is independent of the proxy count; selected accounts determine the account browsers.
+4. Enable **Keep prepared accounts ready for a product alert** if you want continuing readiness checks while waiting. Save the configuration.
+5. Select **Prepare accounts**. Follow **Preparation & queue positions** until each intended account reports current preparation. **Warming up** is an expected phase.
+6. If **Focus account sign-in** appears, use it to finish the account flow. A saved profile alone is not proof that its task browser is ready.
 
-Some sessions will be asked to prove they are a person. The app tries to deal
-with it, and hands it to you when it cannot.
+Keep the app running and the machine awake while waiting. Keep ready uses browser activity and therefore connection traffic. Lost sign-in, stale preparation, access refusal or a changed connection can require attention; read the account's reason before retrying.
 
-- If it can be handled automatically, it is, and the session carries on.
-- If not, a **solve window opens** for that session. Solve it and the session
-  continues from where it was.
-- The **Captcha Solver** page shows which sessions are waiting on a person and
-  lets you open a window yourself.
+### Launch a product
 
-You do not lose your place by taking a moment on one of these — but a session
-sitting unanswered is not progressing, so the alert is worth watching for.
+Paste the HTTPS Costco product URL into the group's product field and click **Launch product**. Ready accounts use their prepared browsers. Cold accounts prepare first; a required sign-in is shown separately before the task can proceed. Automatic product alerts use the same preparation path.
 
-If a Pokémon Center session gets stuck on a device-verification screen that never
-resolves, use **Rotate Session + Proxy** (the pencil icon) to give it a fresh
-browser profile on a different address.
+**Fallback product link** in Configure is optional. You can always paste a current product link into the group controls for a manual launch. **Test queue entry** is a separate diagnostic for an event entry link; it opens one tab per account and does not test multiple queue positions.
 
----
+### Queue tabs, memory and links
 
-## The session table
+The panel distinguishes entering a queue, verification, joining, a held position and an ended event. **Queue position not observed** means the app has not yet established a position; seeing an entry page or checkbox is insufficient.
 
-Sessions are colour-coded down the left edge:
+Additional tabs wait until the first tab has a positively observed held position and existing pages remain healthy. The requested count is a limit, not a promise. Memory checks open pages gradually and can pause expansion below your requested count. The panel shows system/process memory and estimated capacity; per-tab memory is an estimate because pages can share browser processes.
 
-| Colour | Meaning |
-|---|---|
-| 🟡 Yellow | Logging In — signing in |
-| 🔵 Blue | Waiting for Product — ready |
-| 🟢 Green | In Queue — do not stop it |
-| 🔴 Red | Error |
+Use a position's **Focus**, **Queue details** or **Copy full link** controls to inspect that tab. Treat a copied queue link as sensitive. The app exposes the observed link; using it in another browser, sharing it and completing checkout with it are not yet verified. Additional tabs do not create additional Costco accounts or change retailer purchase limits.
 
-- **Filter chips** narrow the table to one phase
-- **Click any column header** to sort
-- **Checkboxes** select rows for Stop or Delete
+If expansion reports a failure, existing positions are preserved. Review the reason; **Launch product** with the same URL can retry expansion after current holding evidence is checked.
 
----
+### Stock, cancellations and restocks
 
-## Discord Monitor
+The session displays **In stock**, **Out of stock** or **Stock unknown** for the current product, selected option and fulfillment. Products without colors or other options use the same stock display. Unknown can mean the page is loading, the selection is incomplete or the available evidence is inconclusive.
 
-Watches a channel and starts a group when a drop is posted.
+**Out of stock does not mean the event is over.** Returned inventory can appear while the event is still active.
 
-1. **Discord Monitor → + Add Monitor**
-2. Choose the retailer, paste the Discord channel ID, link the task group
-3. **Save**, then **▶ Start**
+For a product that needs fresh page loads:
 
----
+1. Select the option you want, if the product has options.
+2. In its preparation panel, choose a **Restock reload interval** of 5, 10 or 30 seconds; the default is 10.
+3. Click **Watch for restock**.
+4. Read the watch status. It reloads only after a fresh out-of-stock reading, waits on unknown stock and stops when stock is found.
+5. Review the retailer page and complete any purchase yourself. The watch does not add to cart or check out.
 
-## Settings
+A confirmed selection change stops the watch: review the new selection and restart it if wanted. Queue or verification progress, access refusal, a confirmed event end, Stop or sleep/resume also stops the watch. Short restocks can fall between checks; no interval guarantees a cancellation purchase.
 
-| Setting | What it does |
-|---|---|
-| IMAP | Fills Walmart login codes from your email |
-| Webhook | Where drop alerts are sent |
-| Check Trigger Live Status | Confirms the app is reaching the trigger server |
-| Force Trigger Resync | Reconnects a stale connection |
-| Sign Out / Re-activate | Clears the stored activation |
-| Check for Updates | Manual update check |
-| Auto Update | Off by default — turn it on only if you want updates applied without asking |
-| Import / Export Config | Backup and restore groups, proxies, monitors and profiles |
+### Manual reload
 
-Exported configs contain your groups, URLs and account emails. They do **not**
-contain proxy credentials. Keep them private regardless.
+Inside a Costco task browser, use **Reload** beside the tabs, **F5** or **Ctrl+R**. This reloads only the selected eligible product tab after checking it.
 
----
+Reload is disabled during preparation/loading, verification, protected queue or purchase progress, access refusal and an ended event. Hover the button for its reason. Manual reload stops that tab's restock watch, so restart **Watch for restock** afterward if you want timed checks to continue.
+
+### Current Costco limits
+
+Costco challenge handling is **manual**; no qualified automatic Costco reCAPTCHA model is included. Active-event admission, multiple distinct queue spots, challenge reuse across those tabs and shared-link behavior still need live-drop validation. The controls make those states observable; they do not establish that every event will behave the same way.
+
+## Pokémon Center
+
+1. Create a Pokémon Center group and choose its proxy group, **Instances** and launch pacing.
+2. Start the group or configure a matching automatic trigger.
+3. Watch each session's queue and challenge status. Use its **Focus** action when attention is needed.
+4. When the retailer allows you through, complete checkout in that session's browser.
+
+A task group does not require an account assignment. Waiting-room appearance and timing can vary by event. Alerts identify the session so you can find the correct window.
+
+Automatic support exists for supported Pokémon Center challenge paths, with bounded attempts and manual handoff. A cleared challenge is separate from successful storefront access. Use recovery or rotation only after reviewing the affected session; replacing a browser or connection can discard its progress.
+
+## Challenges and harvesters
+
+A **harvester** is a slot that routes a current challenge to the appropriate solving workflow. In **Captcha Solver**, create or edit a harvester and choose **Retailer / challenge family**:
+
+| Retailer | Family | What to expect |
+| --- | --- | --- |
+| Pokémon Center | hCaptcha / DataDome | Existing supported automatic paths and manual fallback. |
+| Walmart | PerimeterX | Existing supported handling and manual attention when needed. |
+| Costco | reCAPTCHA | Manual solving in the owning Costco session window. |
+
+Create separate Costco and Pokémon Center harvesters if you run both. A slot accepts only its own retailer's current challenge; reCAPTCHA and hCaptcha are not interchangeable.
+
+When Costco verification appears, finish the checkbox and any challenge in the displayed Costco window. The app observes the result. Opening or closing the window is not a successful solve. An event ending releases the assignment without claiming that verification succeeded.
+
+If a challenge remains unresolved, use **Captcha Solver** and the affected session's **Focus** control to find it. Do not assume unlimited time: challenges, queue positions and purchase windows may expire.
+
+## Automatic triggers and alerts
+
+**Discord Monitor** can watch a configured channel and dispatch to its linked task group. Add a monitor, select the retailer and group, configure its channel and required connection details, then save and start it. For Walmart feed items, **Set as SKU** selects the product for the chosen group. Go to Tasks, verify that product and use **Apply SKU & Arm** before dispatching it with **Drop Now** or its schedule. Set as SKU alone does not replace an existing armed schedule or navigate open sessions.
+
+Before relying on an automatic launch:
+
+- Confirm the correct task group is **Armed** and **Live drops** is on for a real alert.
+- Confirm the monitor is running and points to the intended retailer/group.
+- Use **Settings → General → Check Client Live Status** for the trigger connection. **Force Client Resync** reconnects it when needed.
+- Keep the app running. A configured trigger cannot prepare accounts while the app is closed.
+
+A webhook sends notifications; it does not itself start a group. Configure the relevant webhook setting if you want external alerts. Keep a manual launch plan available: Walmart **Drop Now**, Costco **Launch product**, or the group's normal start controls.
+
+## Focus, stop and protect progress
+
+Use a session's **Focus** or browser action to open its actual window. Costco Focus selects the corresponding tab in its account browser.
+
+**Stop All** reviews protected queue progress before closing it. You can stop only non-queue sessions, or continue through the explicit confirmations to stop everything and forfeit progress. Closing the entire app also interrupts sessions. Read the confirmation instead of assuming protected sessions will always survive the action.
+
+## Back up configuration
+
+Use **Settings → Import / Export Config** for portable configuration. It includes group names, target URLs, monitor channel IDs and keywords, and browser settings.
+
+It omits account/proxy records and assignments, webhook URLs, monitor credentials, schedules and running-session state. It is **not a full backup of credentials, signed-in profiles or queue positions**. Imported groups and monitors remain disabled until you reconnect the missing settings and review them. Keep exported files private.
 
 ## Troubleshooting
 
-**Sessions stuck on Logging In.** Check **Settings → IMAP** and run the test.
-Open the inbox and confirm a code actually arrived.
-
-**Trigger connection keeps closing (1006).** Click **Force Trigger Resync**. If
-it keeps failing after the machine has slept, Sign Out and re-activate.
-
-**Stop All left some sessions running.** Sessions In Queue are skipped on
-purpose, so you do not lose the place.
-
-**"Cannot find latest.yml".** A release is mid-publish. Wait a minute and check
-again.
-
-**A Pokémon Center session sits on device verification.** Rotate Session + Proxy
-for a fresh profile and address.
-
-**Sessions fail immediately on start.** Usually the proxy. Check the proxy group
-has working entries and that you have enough of them for the session count.
-
-**A challenge window opened and I closed it.** Reopen it from the **Captcha
-Solver** page.
-
----
-
-## Version history
-
-See the [releases page](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases)
-— every release carries its own notes.
-
----
+| Problem | Next step |
+| --- | --- |
+| A group did not respond to an alert | Check Armed, Live drops, the linked retailer/group and monitor/trigger status. |
+| Walmart is still logging in | Check enabled IMAP mailboxes and code delivery, then Focus the browser for additional verification. |
+| Walmart says stale while the browser is still in line | Inspect the browser and Walmart run summary; stale evidence does not mean admission or an ended queue. Preserve the running window while investigating. |
+| Costco preparation is suspended or not current | Read its reason. Check the account's sign-in, task connection and current browser before explicitly preparing again. |
+| Costco reports duplicate task exits or no connection capacity | Assign a task proxy with a different exit address to each additional account; only one active account can use Direct. |
+| Costco shows Stock unknown | Let the product finish loading and select any required option. Check fulfillment restrictions. Unknown is not an out-of-stock verdict. |
+| Costco restock watch stopped | Read its outcome. In-stock detection, selection changes and protected/error states stop refreshes. Review before restarting. |
+| Costco Reload is greyed out | Hover it for the reason; protected or unqualified pages cannot be reloaded by this control. |
+| Fewer Costco tabs opened than requested | Check first-position evidence, existing tab health, memory capacity and any expansion pause. |
+| A challenge window disappeared | Inspect the session and Captcha Solver; the event may have ended or the current assignment changed. |
+| Trigger connection closed | Try Force Client Resync. If still failing, inspect connectivity and activation before signing out and reactivating. |
+| An update reports missing files | Check the release's assets; publishing may still be in progress. Retry after the release is complete. |
+| Local protected credentials cannot be read | Restart once, retain the existing app data and contact support with the warning. Do not delete profiles to troubleshoot blindly. |
 
 ## Support
 
-Include:
+Include your app version, operating system, retailer, the action you attempted, the status shown and whether it repeats. Add a relevant Logs excerpt or screenshot after removing credentials, verification codes, private queue links and other account data.
 
-1. App version — **Settings → General → App Updates**
-2. Your OS and version
-3. Which page or action failed
-4. The relevant part of **Logs**
-5. Whether it happens every time
+## Repository contributors
+
+Install the [local commit privacy checks](https://github.com/KNULL-AI/KNULLS-QD-Releases/blob/main/.github/LOCAL-VERIFICATION.md) in each clone. Release builds and verification run locally; GitHub Actions is not used for release publication.
