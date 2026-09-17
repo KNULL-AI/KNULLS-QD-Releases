@@ -4,7 +4,7 @@ Desktop app for managing Walmart, Pokémon Center and Costco browser sessions.
 
 **[Download the latest release](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases/latest)** · [Release notes](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases)
 
-This guide describes **1.1.77**. Use the release notes to check which features are included in your installed version.
+This guide describes **v1.1.78**. Update to this version for the Costco verification and sign-out changes described below. Use the release notes to check which features are included in your installed version.
 
 ## Start here
 
@@ -63,6 +63,10 @@ The app matches eligible retailer codes to the account requesting them. Mailbox 
 ### Create a task group
 
 In **Tasks**, choose **New Group**, name it and select the retailer. Open **Configure** to assign accounts or an instance count, connections and launch pacing.
+
+**Launch Delay** spaces launches within a group. **Hold After Release** is a
+Walmart-only option for delaying the group relative to its trigger. Costco and
+Pokémon Center groups do not show or apply it, including any older saved value.
 
 Two controls govern automatic triggers:
 
@@ -123,6 +127,10 @@ An account's additional queue tabs share its task connection and signed-in brows
 
 Keep the app running and the machine awake while waiting. Keep ready uses browser activity and therefore connection traffic. Lost sign-in, stale preparation, access refusal or a changed connection can require attention; read the account's reason before retrying.
 
+The queue can show **Verifying browser** during a background check, or ask for **Continue in queue window** / **Your turn · check queue window**. Focus the browser and follow any visible retailer prompt. A verification stage, a configured list of challenge methods or a your-turn message does not by itself establish admission or a purchase window.
+
+**Queue entry denied** and **Queue entry rate limited** pause automatic activity for the affected task. Inspect the browser before using **Prepare accounts** to explicitly retry. Repeated alerts, Keep ready, manual Reload and restock watching do not bypass that pause. These messages do not by themselves mean the saved account is signed out.
+
 ### Launch a product
 
 Paste the HTTPS Costco product URL into the group's product field and click **Launch product**. Ready accounts use their prepared browsers. Cold accounts prepare first; a required sign-in is shown separately before the task can proceed. Automatic product alerts use the same preparation path.
@@ -163,7 +171,7 @@ Reload is disabled during preparation/loading, verification, protected queue or 
 
 ### Current Costco limits
 
-Costco challenge handling is **manual**; no qualified automatic Costco reCAPTCHA model is included. Active-event admission, multiple distinct queue spots, challenge reuse across those tabs and shared-link behavior still need live-drop validation. The controls make those states observable; they do not establish that every event will behave the same way.
+Costco challenge handling is **manual** for reCAPTCHA and BotDeflector; no qualified automatic Costco model is included. Active-event admission, multiple distinct queue spots, challenge reuse across those tabs and shared-link behavior still need live-drop validation. The controls make those states observable; they do not establish that every event will behave the same way. The existing first-held-position and memory rules for extra tabs are unchanged.
 
 ## Pokémon Center
 
@@ -184,22 +192,31 @@ A **harvester** is a slot that routes a current challenge to the appropriate sol
 | --- | --- | --- |
 | Pokémon Center | hCaptcha / DataDome | Existing supported automatic paths and manual fallback. |
 | Walmart | PerimeterX | Existing supported handling and manual attention when needed. |
-| Costco | reCAPTCHA | Manual solving in the owning Costco session window. |
+| Costco | reCAPTCHA / BotDeflector | Manual verification in the owning Costco session window. |
 
-Create separate Costco and Pokémon Center harvesters if you run both. A slot accepts only its own retailer's current challenge; reCAPTCHA and hCaptcha are not interchangeable.
+Create separate Costco and Pokémon Center harvesters if you run both. A slot accepts only its own retailer's current session and challenge. reCAPTCHA, BotDeflector and hCaptcha assignments are not interchangeable. When Costco changes verification provider, the harvester follows the new visible stage in that session.
 
-When Costco verification appears, finish the checkbox and any challenge in the displayed Costco window. The app observes the result. Opening or closing the window is not a successful solve. An event ending releases the assignment without claiming that verification succeeded.
+When Costco verification appears, finish the checkbox and any challenge in the displayed Costco window. The app observes the result. Opening or closing the window is not a successful solve. An event ending releases the assignment without claiming that verification succeeded. A separate collection tool can capture vendor-demo examples for future research; its existence does not mean a Costco model is trained or available.
 
 If a challenge remains unresolved, use **Captcha Solver** and the affected session's **Focus** control to find it. Do not assume unlimited time: challenges, queue positions and purchase windows may expire.
 
 ## Automatic triggers and alerts
 
-**Discord Monitor** can watch a configured channel and dispatch to its linked task group. Add a monitor, select the retailer and group, configure its channel and required connection details, then save and start it. For Walmart feed items, **Set as SKU** selects the product for the chosen group. Go to Tasks, verify that product and use **Apply SKU & Arm** before dispatching it with **Drop Now** or its schedule. Set as SKU alone does not replace an existing armed schedule or navigate open sessions.
+Retailer discovery is global and managed by the backend. In **Monitor**, check the
+connection status and **Event Log**; eligible alerts dispatch to armed groups for
+that retailer. Group **Live drops** controls whether the group accepts real alerts
+or test alerts. There is no channel or single linked group to attach in the monitor
+editor. An online connection alone does not prove an alert was received or launched.
+
+For Walmart feed items, **Set as SKU** selects the product for the chosen group.
+Go to Tasks, verify that product and use **Apply SKU & Arm** before dispatching it
+with **Drop Now** or its schedule. Set as SKU alone does not replace an existing
+armed schedule or navigate open sessions.
 
 Before relying on an automatic launch:
 
 - Confirm the correct task group is **Armed** and **Live drops** is on for a real alert.
-- Confirm the monitor is running and points to the intended retailer/group.
+- Confirm the intended retailer is listed in Monitor and review its eligible groups and Event Log.
 - Use **Settings → General → Check Client Live Status** for the trigger connection. **Force Client Resync** reconnects it when needed.
 - Keep the app running. A configured trigger cannot prepare accounts while the app is closed.
 
@@ -225,6 +242,8 @@ It omits account/proxy records and assignments, webhook URLs, monitor credential
 | Walmart is still logging in | Check enabled IMAP mailboxes and code delivery, then Focus the browser for additional verification. |
 | Walmart says stale while the browser is still in line | Inspect the browser and Walmart run summary; stale evidence does not mean admission or an ended queue. Preserve the running window while investigating. |
 | Costco preparation is suspended or not current | Read its reason. Check the account's sign-in, task connection and current browser before explicitly preparing again. |
+| Costco queue entry is denied or rate limited | Inspect the browser. Automatic retries are paused; use Prepare accounts deliberately when ready to recheck. |
+| Costco sign-out window stays open | Complete sign-out on the retailer page and read the account status. The app closes after confirming signed-out state and local cleanup; a cleanup warning requires attention. |
 | Costco reports duplicate task exits or no connection capacity | Assign a task proxy with a different exit address to each additional account; only one active account can use Direct. |
 | Costco shows Stock unknown | Let the product finish loading and select any required option. Check fulfillment restrictions. Unknown is not an out-of-stock verdict. |
 | Costco restock watch stopped | Read its outcome. In-stock detection, selection changes and protected/error states stop refreshes. Review before restarting. |
