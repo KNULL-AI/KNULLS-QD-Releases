@@ -4,7 +4,7 @@ Desktop app for managing Walmart, Pokémon Center and Costco browser sessions.
 
 **[Download the latest release](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases/latest)** · [Release notes](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases)
 
-This guide describes **v1.1.78**. Update to this version for the Costco verification and sign-out changes described below. Use the release notes to check which features are included in your installed version.
+This guide describes **v1.1.79**. Update for Costco preparation recovery, queue-attention alerts and revised tab memory estimates. Use the release notes to check which features are included in your installed version.
 
 ## Start here
 
@@ -127,7 +127,11 @@ An account's additional queue tabs share its task connection and signed-in brows
 
 Keep the app running and the machine awake while waiting. Keep ready uses browser activity and therefore connection traffic. Lost sign-in, stale preparation, access refusal or a changed connection can require attention; read the account's reason before retrying.
 
+An empty Costco group can be saved as a draft. Removing its last account also disarms the group and clears its Direct assignment; review these changes before Save. Assign accounts and valid task connections before arming or launching it.
+
 The queue can show **Verifying browser** during a background check, or ask for **Continue in queue window** / **Your turn · check queue window**. Focus the browser and follow any visible retailer prompt. A verification stage, a configured list of challenge methods or a your-turn message does not by itself establish admission or a purchase window.
+
+An in-app attention alert names the account and tab when a your-turn or Continue state is detected. **Focus** opens that existing tab; it does not answer the retailer's prompt. **Dismiss** hides that episode's alert. The app does not bring the browser forward automatically, so keep its progress visible when your turn is approaching.
 
 **Queue entry denied** and **Queue entry rate limited** pause automatic activity for the affected task. Inspect the browser before using **Prepare accounts** to explicitly retry. Repeated alerts, Keep ready, manual Reload and restock watching do not bypass that pause. These messages do not by themselves mean the saved account is signed out.
 
@@ -143,13 +147,15 @@ The panel distinguishes entering a queue, verification, joining, a held position
 
 Additional tabs wait until the first tab has a positively observed held position and existing pages remain healthy. The requested count is a limit, not a promise. Memory checks open pages gradually and can pause expansion below your requested count. The panel shows system/process memory and estimated capacity; per-tab memory is an estimate because pages can share browser processes.
 
+The first browser and extra tabs use separate memory estimates. Extra-tab allowance begins conservatively and can decrease after qualified observations; later allocations can raise it again. **Capacity paused** means the next launch lacks qualified app/system headroom. Existing tabs stay open. This is not a fixed limit such as 20 tabs; free memory and review the estimate before explicitly retrying expansion.
+
 Use a position's **Focus**, **Queue details** or **Copy full link** controls to inspect that tab. Treat a copied queue link as sensitive. The app exposes the observed link; using it in another browser, sharing it and completing checkout with it are not yet verified. Additional tabs do not create additional Costco accounts or change retailer purchase limits.
 
 If expansion reports a failure, existing positions are preserved. Review the reason; **Launch product** with the same URL can retry expansion after current holding evidence is checked.
 
 ### Stock, cancellations and restocks
 
-The session displays **In stock**, **Out of stock** or **Stock unknown** for the current product, selected option and fulfillment. Products without colors or other options use the same stock display. Unknown can mean the page is loading, the selection is incomplete or the available evidence is inconclusive.
+For drops, **In stock**, **Out of stock** or **Stock unknown** describe delivery availability for the selected product. Warehouse availability is separate and does not make a delivery-only item purchasable. Products without colors or other options use the same stock display. Unknown can mean the page is loading, the selection is incomplete or the available evidence is inconclusive.
 
 **Out of stock does not mean the event is over.** Returned inventory can appear while the event is still active.
 
@@ -171,7 +177,7 @@ Reload is disabled during preparation/loading, verification, protected queue or 
 
 ### Current Costco limits
 
-Costco challenge handling is **manual** for reCAPTCHA and BotDeflector; no qualified automatic Costco model is included. Active-event admission, multiple distinct queue spots, challenge reuse across those tabs and shared-link behavior still need live-drop validation. The controls make those states observable; they do not establish that every event will behave the same way. The existing first-held-position and memory rules for extra tabs are unchanged.
+Costco challenge handling is **manual** for reCAPTCHA and BotDeflector; no qualified automatic Costco model is included. Active-event admission, multiple distinct queue spots, challenge reuse across those tabs and shared-link behavior still need live-drop validation. The controls make those states observable; they do not establish that every event will behave the same way. Extra tabs still require a confirmed first held position and sufficient memory.
 
 ## Pokémon Center
 
@@ -257,6 +263,10 @@ It omits account/proxy records and assignments, webhook URLs, monitor credential
 ## Support
 
 Include your app version, operating system, retailer, the action you attempted, the status shown and whether it repeats. Add a relevant Logs excerpt or screenshot after removing credentials, verification codes, private queue links and other account data.
+
+### For invited label reviewers
+
+The hosted collection sections are **hCaptcha**, **reCAPTCHA** and **BotDeflector**. To correct an earlier label, enter its full, displayed short or partial reference in **Find reference**, then choose **Search all captures**. Search includes saved labels outside the current date/pending filter. Save pending edits first; ambiguous references show every match so you can choose the intended capture. Use the normal Save control to record a correction. **Clear search** restores the complete list. Demo examples do not establish live Costco model accuracy.
 
 ## Repository contributors
 
