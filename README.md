@@ -4,7 +4,7 @@ Desktop app for managing Walmart, Pokémon Center and Costco browser sessions.
 
 **[Download the latest release](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases/latest)** · [Release notes](https://github.com/KNULL-AI/KNULLS-QD-Releases/releases)
 
-This guide describes **v1.1.79**. Update for Costco preparation recovery, queue-attention alerts and revised tab memory estimates. Use the release notes to check which features are included in your installed version.
+Guide updated **October 12, 2026**. Controls can vary by installed version. Check **Settings → General → App Updates** and your release notes if a control below is unavailable; use the latest release available for your platform.
 
 ## Start here
 
@@ -43,6 +43,10 @@ Enter your license key on the Activation screen. **Settings → General → Sign
 In **Proxy Pool**, create a proxy group, select it and use **Add Proxies**. Supported entry formats include `host:port` and `host:port:user:pass`. Use **Test Proxies** and inspect the result before assigning the group.
 
 A connection test confirms connectivity at that moment. It does not establish that a retailer will accept the connection. Keep connections stable while accounts are signed in or holding queue progress.
+
+Proxy group members have numbered labels, for example **pkcresi 1** and **pkcresi 2**. Session rows show their assigned label and active sharing of the same saved entry. Review the group allocation preview and reuse policy before launching. **Require an unused proxy per session** needs enough unused configured connections; it cannot guarantee distinct public exit addresses.
+
+**Measure exit** on a running proxied session performs one ipify lookup through that session and shows its time, sampled address and matching recent samples. It does not run automatically or change assignments. Samples become stale after five minutes; failed or refused lookups remain unknown. An exit measured at one destination does not prove which address a store saw or explain an access refusal.
 
 Costco has separate account sign-in and task connections; use its [connection table](#costco-connections) below. For other retailers, review both the task group's proxy pool and any account-specific assignment before launching.
 
@@ -133,7 +137,7 @@ The queue can show **Verifying browser** during a background check, or ask for *
 
 An in-app attention alert names the account and tab when a your-turn or Continue state is detected. **Focus** opens that existing tab; it does not answer the retailer's prompt. **Dismiss** hides that episode's alert. The app does not bring the browser forward automatically, so keep its progress visible when your turn is approaching.
 
-**Queue entry denied** and **Queue entry rate limited** pause automatic activity for the affected task. Inspect the browser before using **Prepare accounts** to explicitly retry. Repeated alerts, Keep ready, manual Reload and restock watching do not bypass that pause. These messages do not by themselves mean the saved account is signed out.
+**Queue entry denied** and **Queue entry rate limited** pause automatic activity for the affected task. Inspect the browser before using **Prepare accounts** to explicitly retry. Repeated alerts, Keep ready and restock watching do not bypass that pause. Manual Reload remains available but does not clear the automatic-task pause. These messages do not by themselves mean the saved account is signed out.
 
 ### Launch a product
 
@@ -171,13 +175,11 @@ A confirmed selection change stops the watch: review the new selection and resta
 
 ### Manual reload
 
-Inside a Costco task browser, use **Reload** beside the tabs, **F5** or **Ctrl+R**. This reloads only the selected eligible product tab after checking it.
-
-Reload is disabled during preparation/loading, verification, protected queue or purchase progress, access refusal and an ended event. Hover the button for its reason. Manual reload stops that tab's restock watch, so restart **Watch for restock** afterward if you want timed checks to continue.
+Inside a Costco task browser, use **Reload** beside the tabs, **F5** or **Ctrl+R** for the selected task tab, including while loading, in a queue or during verification. While loading, the button becomes **X — stop loading**; click it or press **Esc** to stop. These actions stop that tab's restock watch, so restart **Watch for restock** afterward if wanted. Refreshing can affect the site's queue progress.
 
 ### Current Costco limits
 
-Costco challenge handling is **manual** for reCAPTCHA and BotDeflector; no qualified automatic Costco model is included. Active-event admission, multiple distinct queue spots, challenge reuse across those tabs and shared-link behavior still need live-drop validation. The controls make those states observable; they do not establish that every event will behave the same way. Extra tabs still require a confirmed first held position and sufficient memory.
+Costco reCAPTCHA handling remains manual. BotDeflector uses an experimental automatic model when available, with bounded attempts and manual fallback; live Costco acceptance is not verified. Activated apps check for the model automatically, and **Settings → BotDeflector model updates** shows its status. Active-event admission, multiple distinct queue spots and shared-link behavior still need live-drop validation. Extra tabs require a confirmed first held position and sufficient memory.
 
 ## Pokémon Center
 
@@ -198,13 +200,25 @@ A **harvester** is a slot that routes a current challenge to the appropriate sol
 | --- | --- | --- |
 | Pokémon Center | hCaptcha / DataDome | Existing supported automatic paths and manual fallback. |
 | Walmart | PerimeterX | Existing supported handling and manual attention when needed. |
-| Costco | reCAPTCHA / BotDeflector | Manual verification in the owning Costco session window. |
+| Costco | reCAPTCHA / BotDeflector | Manual reCAPTCHA; experimental automatic BotDeflector when a model is available, with manual fallback in the owning window. |
 
 Create separate Costco and Pokémon Center harvesters if you run both. A slot accepts only its own retailer's current session and challenge. reCAPTCHA, BotDeflector and hCaptcha assignments are not interchangeable. When Costco changes verification provider, the harvester follows the new visible stage in that session.
 
-When Costco verification appears, finish the checkbox and any challenge in the displayed Costco window. The app observes the result. Opening or closing the window is not a successful solve. An event ending releases the assignment without claiming that verification succeeded. A separate collection tool can capture vendor-demo examples for future research; its existence does not mean a Costco model is trained or available.
+When Costco verification needs manual input, finish it in the displayed Costco window. The app observes the result. Opening or closing the window is not a successful solve. An event ending releases the assignment without claiming that verification succeeded. Collection and model availability are separate from verified acceptance.
 
 If a challenge remains unresolved, use **Captcha Solver** and the affected session's **Focus** control to find it. Do not assume unlimited time: challenges, queue positions and purchase windows may expire.
+
+An automatic attempt that hands off leaves the browser open and frees its automatic harvester after pending input cleanup. **Needs manual input · automatic harvester freed** indicates that distinction. A **releasing** slot is still cleaning up; an explicitly Manual harvester keeps its assignment until it ends. Open windows and occupied harvesters are different counts.
+
+**In-frame Capture** contains the remaining challenge diagnostic options. The separate **Challenge extraction** setting has been removed; recording does not enable automatic solving.
+
+## Session controls and progress
+
+Ordinary session browsers have **Back**, **Forward** and **Refresh**. While loading, Refresh becomes **X — stop loading**. **F5** / **Ctrl+R** refresh and **Esc** stops loading. Page-initiated refreshes are allowed. Stopping a load cancels pending app recovery for it; automatic recovery still uses its own checks.
+
+Each task row has an individual **Stop** action. The runtime summary separates open browsers, automatic assignments, free harvesters, manual attention and pending work. **Focus next needing attention** opens the next affected session. **Export run scorecard** saves the current run's recorded attempts and milestones for review.
+
+The queue leaderboard includes test sessions and a timer when an estimate is available. Storefront, cart and checkout progress remain distinct; a successful cart request or checkout page does not confirm **Order placed**.
 
 ## Automatic triggers and alerts
 
@@ -213,6 +227,10 @@ connection status and **Event Log**; eligible alerts dispatch to armed groups fo
 that retailer. Group **Live drops** controls whether the group accepts real alerts
 or test alerts. There is no channel or single linked group to attach in the monitor
 editor. An online connection alone does not prove an alert was received or launched.
+
+For Pokémon Center and Walmart, a second automatic launch is skipped and recorded while the same group and live/test scope is already starting or running. Separate test groups can run alongside live groups. Manual launches remain available, and a stopped group can respond to its next eligible trigger. The guard does not change a group's requested instance count or existing cooldown rules.
+
+Costco product alerts use their prepared account browsers. Existing parents remain available for those actions; the Costco runtime handles duplicate product requests and retains its account, queue and refusal checks.
 
 For Walmart feed items, **Set as SKU** selects the product for the chosen group.
 Go to Tasks, verify that product and use **Apply SKU & Arm** before dispatching it
@@ -253,7 +271,7 @@ It omits account/proxy records and assignments, webhook URLs, monitor credential
 | Costco reports duplicate task exits or no connection capacity | Assign a task proxy with a different exit address to each additional account; only one active account can use Direct. |
 | Costco shows Stock unknown | Let the product finish loading and select any required option. Check fulfillment restrictions. Unknown is not an out-of-stock verdict. |
 | Costco restock watch stopped | Read its outcome. In-stock detection, selection changes and protected/error states stop refreshes. Review before restarting. |
-| Costco Reload is greyed out | Hover it for the reason; protected or unqualified pages cannot be reloaded by this control. |
+| Refresh shows X instead | The page is loading. Click X or press Esc to stop that load; F5/Ctrl+R requests a fresh reload. |
 | Fewer Costco tabs opened than requested | Check first-position evidence, existing tab health, memory capacity and any expansion pause. |
 | A challenge window disappeared | Inspect the session and Captcha Solver; the event may have ended or the current assignment changed. |
 | Trigger connection closed | Try Force Client Resync. If still failing, inspect connectivity and activation before signing out and reactivating. |
@@ -263,11 +281,3 @@ It omits account/proxy records and assignments, webhook URLs, monitor credential
 ## Support
 
 Include your app version, operating system, retailer, the action you attempted, the status shown and whether it repeats. Add a relevant Logs excerpt or screenshot after removing credentials, verification codes, private queue links and other account data.
-
-### For invited label reviewers
-
-The hosted collection sections are **hCaptcha**, **reCAPTCHA** and **BotDeflector**. To correct an earlier label, enter its full, displayed short or partial reference in **Find reference**, then choose **Search all captures**. Search includes saved labels outside the current date/pending filter. Save pending edits first; ambiguous references show every match so you can choose the intended capture. Use the normal Save control to record a correction. **Clear search** restores the complete list. Demo examples do not establish live Costco model accuracy.
-
-## Repository contributors
-
-Install the [local commit privacy checks](https://github.com/KNULL-AI/KNULLS-QD-Releases/blob/main/.github/LOCAL-VERIFICATION.md) in each clone. Release builds and verification run locally; GitHub Actions is not used for release publication.
